@@ -36,10 +36,27 @@ def test_every_committed_profile_loads_and_resolves_paths(profile_path: Path) ->
     assert isinstance(config, ProjectConfig)
     output_dir = config.values["paths"]["output_dir"]  # type: ignore[index]
     reports_dir = config.values["paths"]["reports_dir"]  # type: ignore[index]
+    model_cache_dir = config.values["paths"]["model_cache_dir"]  # type: ignore[index]
     assert isinstance(output_dir, Path) and output_dir.is_absolute()
     assert isinstance(reports_dir, Path) and reports_dir.is_absolute()
     assert output_dir.is_relative_to(ROOT / "outputs")
     assert reports_dir.is_relative_to(ROOT / "reports")
+    assert isinstance(model_cache_dir, Path) and model_cache_dir.is_absolute()
+    assert model_cache_dir.is_relative_to(ROOT / "outputs")
+
+
+def test_profiles_pin_native_model_and_inference_defaults() -> None:
+    for profile_path in PROFILE_PATHS:
+        values = load_config(profile_path, project_root=ROOT).as_dict()
+        assert values["schema_version"] == 2
+        assert values["model"] == {
+            "integration_track": "transformers_native",
+            "id": "Qwen/Qwen3-ASR-0.6B-hf",
+            "revision": "6aa69c382e2b426eee1f5870d4c95859a74b6445",
+            "processor_revision": "6aa69c382e2b426eee1f5870d4c95859a74b6445",
+        }
+        assert values["inference"]["max_new_tokens"] == 256
+        assert values["inference"]["precision"] == "auto"
 
 
 @pytest.mark.parametrize(
@@ -81,6 +98,52 @@ def test_empty_model_id_fails(tmp_path: Path) -> None:
     profile["model"]["id"] = "   "
 
     with pytest.raises(ConfigError, match="model.id"):
+        load_config(_write_config(tmp_path, profile), project_root=ROOT)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("integration_track", "qwen_asr_wrapper"),
+        ("id", "Qwen/Qwen3-ASR-0.6B"),
+        ("revision", "wrong"),
+        ("processor_revision", "wrong"),
+    ],
+)
+def test_native_track_rejects_mixed_model_metadata(
+    tmp_path: Path, field: str, value: str
+) -> None:
+    profile = _local_profile()
+    profile["model"][field] = value
+
+    with pytest.raises(ConfigError, match=f"model.{field}"):
+        load_config(_write_config(tmp_path, profile), project_root=ROOT)
+
+
+@pytest.mark.parametrize("field", ["revision", "processor_revision"])
+def test_native_track_requires_revisions(tmp_path: Path, field: str) -> None:
+    profile = _local_profile()
+    del profile["model"][field]
+
+    with pytest.raises(ConfigError, match="missing required keys"):
+        load_config(_write_config(tmp_path, profile), project_root=ROOT)
+
+
+@pytest.mark.parametrize("value", [0, -1, True, 4097])
+def test_invalid_generation_limit_fails(tmp_path: Path, value: object) -> None:
+    profile = _local_profile()
+    profile["inference"]["max_new_tokens"] = value
+
+    with pytest.raises(ConfigError, match="max_new_tokens"):
+        load_config(_write_config(tmp_path, profile), project_root=ROOT)
+
+
+@pytest.mark.parametrize("precision", ["float16", "bfloat16"])
+def test_cpu_half_precision_fails(tmp_path: Path, precision: str) -> None:
+    profile = _local_profile()
+    profile["inference"].update({"device": "cpu", "precision": precision})
+
+    with pytest.raises(ConfigError, match="CPU inference"):
         load_config(_write_config(tmp_path, profile), project_root=ROOT)
 
 
@@ -146,7 +209,7 @@ def test_unknown_keys_fail(tmp_path: Path, location: str) -> None:
     if location == "top":
         profile["surprise"] = True
     else:
-        profile["model"]["revision"] = "unqualified"
+        profile["model"]["surprise"] = "unqualified"
 
     with pytest.raises(ConfigError, match="unknown keys"):
         load_config(_write_config(tmp_path, profile), project_root=ROOT)
@@ -232,7 +295,7 @@ def test_loaded_configuration_is_recursively_immutable() -> None:
 
     detached = config.as_dict()
     detached["model"]["id"] = "changed"
-    assert config.values["model"]["id"] == "Qwen/Qwen3-ASR-0.6B"  # type: ignore[index]
+    assert config.values["model"]["id"] == "Qwen/Qwen3-ASR-0.6B-hf"  # type: ignore[index]
 
 
 def test_loading_does_not_modify_yaml_or_create_directories(tmp_path: Path) -> None:
@@ -245,6 +308,7 @@ def test_loading_does_not_modify_yaml_or_create_directories(tmp_path: Path) -> N
     profile = _local_profile()
     profile["paths"]["output_dir"] = "outputs/not-created"
     profile["paths"]["reports_dir"] = "reports/not-created"
+    profile["paths"]["model_cache_dir"] = "outputs/model-cache-not-created"
     config_path = _write_config(config_dir, profile)
     original = config_path.read_bytes()
 
@@ -253,6 +317,7 @@ def test_loading_does_not_modify_yaml_or_create_directories(tmp_path: Path) -> N
     assert config_path.read_bytes() == original
     assert not (project_root / "outputs").exists()
     assert not (project_root / "reports").exists()
+    assert not (project_root / "outputs" / "model-cache-not-created").exists()
     assert config.as_dict()["paths"]["output_dir"] == str(
         project_root / "outputs" / "not-created"
     )

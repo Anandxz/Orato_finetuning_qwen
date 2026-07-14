@@ -1,0 +1,3 @@
+# Qualification candidates only. Training is not implemented or installed by default.
+accelerate==1.14.0
+datasets==5.0.0

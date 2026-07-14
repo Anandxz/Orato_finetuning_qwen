@@ -25,6 +25,7 @@ def test_package_import_does_not_load_heavy_libraries() -> None:
         "peft",
         "qwen_asr",
         "soundfile",
+        "soxr",
         "torch",
         "transformers",
     }

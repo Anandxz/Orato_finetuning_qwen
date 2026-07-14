@@ -1,0 +1,10 @@
+-r base.txt
+
+# Install torch==2.11.0 from the official CPU or CUDA 12.8 index first.
+transformers==5.13.0
+numpy==2.4.2
+soundfile==0.14.0
+soxr==1.1.0
+huggingface-hub==1.23.0
+tokenizers==0.22.2
+safetensors==0.8.0

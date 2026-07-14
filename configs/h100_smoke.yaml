@@ -1,10 +1,19 @@
-schema_version: 1
+schema_version: 2
 profile:
   name: h100_smoke
   intent: single_h100_one_hour_smoke
   training_status: not_implemented
 model:
-  id: Qwen/Qwen3-ASR-0.6B
+  integration_track: transformers_native
+  id: Qwen/Qwen3-ASR-0.6B-hf
+  revision: 6aa69c382e2b426eee1f5870d4c95859a74b6445
+  processor_revision: 6aa69c382e2b426eee1f5870d4c95859a74b6445
+inference:
+  device: cuda
+  precision: auto
+  offline: false
+  language_hint: null
+  max_new_tokens: 256
 transcript:
   policy: mixed_devanagari_hindi_latin_english_v1
   hindi_script: devanagari
@@ -43,3 +52,4 @@ evaluation:
 paths:
   output_dir: outputs/h100_smoke
   reports_dir: reports/h100_smoke
+  model_cache_dir: outputs/model_cache

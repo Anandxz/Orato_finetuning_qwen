@@ -1,11 +1,9 @@
 # Orato Qwen3-ASR
 
-Orato is building a reproducible Python workflow for adapting
-`Qwen/Qwen3-ASR-0.6B` to Hindi, English, and natural Hindi-English
-code-switching in real-time voice-agent calls.
-
-The canonical transcript style uses Devanagari for Hindi and Latin script for
-English, for example:
+Orato is building a reproducible Python workflow for adapting Qwen3-ASR to
+Hindi, English, and natural Hindi-English code-switching in real-time
+voice-agent calls. The canonical transcript style uses Devanagari for Hindi
+and Latin script for English:
 
 ```text
 मुझे appointment next Monday के लिए reschedule करना है
@@ -16,119 +14,157 @@ training, evaluation, and deployment context.
 
 ## Current status
 
-This repository currently provides only the project foundation:
+This milestone selects the native Transformers track and adds one-shot base
+inference for local WAV/FLAC audio. It provides:
 
-- A small installable Python package.
-- Four illustrative configuration profiles.
-- Configuration validation and safe local path resolution.
-- A lightweight command-line interface and environment doctor.
-- Offline, CPU-only foundational tests.
+- Strict schema-v2 configuration profiles.
+- Lazy environment, dependency, CUDA, and GPU reporting.
+- Non-mutating float32 audio decoding, mono downmixing, and 16 kHz resampling.
+- Explicit native processor/model loading and deterministic transcription.
+- CLI model inspection, ML doctor, inference preflight, and sanitized JSON.
+- Dependency-free unit tests plus an owner-audio-gated integration test.
 
-Qwen loading, audio and manifest handling, training, evaluation, checkpoints,
-Azure integration, distributed launch, and GPU checks are **not implemented in
-this milestone**. The configuration values are unqualified examples, not
-recommended hyperparameters or claims about memory fit.
+The selected model is `Qwen/Qwen3-ASR-0.6B-hf` at revision
+`6aa69c382e2b426eee1f5870d4c95859a74b6445`, loaded only with native
+`AutoProcessor` and `AutoModelForMultimodalLM` classes. The older
+`Qwen/Qwen3-ASR-0.6B`/`qwen-asr` wrapper is a separate alternative and must not
+be mixed with this integration.
 
-## Future execution modes
-
-One eventual training entry point is intended to serve:
-
-- Local CPU validation and reporting checks.
-- RTX 3050 6 GB pipeline qualification with at most tiny workloads where they
-  fit.
-- Single-H100 tiny, one-hour, and approximately 100-hour experiments.
-- One-node, eight-H100 distributed execution after the single-GPU path works.
-- Approximately 1,000-hour capability after smaller runs are qualified.
-
-The local profile does not claim that full-parameter Qwen3-ASR fine-tuning fits
-in 6 GB VRAM. The eight-GPU profile describes a planned capability only.
+Fine-tuning, manifests, evaluation metrics, checkpoints, Azure, distributed
+inference, FlashAttention, quantization, and serving are not implemented.
+Configuration training values remain unqualified examples, not recommended
+hyperparameters or memory-fit claims.
 
 ## Repository structure
 
 ```text
-configs/             Illustrative hardware and data-scale profiles
-requirements/        Dependency qualification notes for future milestones
-scripts/             Thin command-line wrappers
-src/orato_asr/       Authoritative Python package
-tests/               Inexpensive offline tests
-outputs/             Generated run artifacts (ignored except .gitkeep)
-reports/             Generated reports (ignored except .gitkeep)
+configs/             Hardware and data-scale profiles
+requirements/        Explicit inference pins and later training candidates
+scripts/             Thin preflight entry point
+src/orato_asr/       Authoritative package and native inference code
+tests/               Offline unit tests and gated integration test
+outputs/             Ignored model caches and generated artifacts
+reports/             Ignored sanitized qualification evidence
 ```
 
-Future reports are expected to include resolved configuration and environment
-information, metrics, predictions, checkpoint verification, and PNG graphs.
-Generated artifacts remain outside version control.
+## Python 3.12 inference environment
 
-## Development installation
-
-Python 3.12 is recommended. The package supports Python 3.11 through 3.13.
-Create and activate an isolated environment before installing dependencies:
+Python 3.12 is the recommended and qualified target. The lightweight package
+metadata supports Python 3.11 through 3.13. Use a dedicated environment and
+install PyTorch from its official wheel index before the inference group:
 
 ```bash
-python3.12 -m venv .venv
-source .venv/bin/activate
+python3.12 -m venv .venv-inference
+source .venv-inference/bin/activate
+python -m pip install --upgrade pip
+
+# NVIDIA CUDA 12.8 environment
+python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cu128
+
+# For a CPU-only environment, replace the command above with:
+# python -m pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+
+python -m pip install -r requirements/inference.txt
 python -m pip install -e ".[dev]"
+python -m pip check
 ```
 
-Dependency installation belongs in environment setup, never in application,
-training, or notebook code.
+The selected direct pins are Transformers 5.13.0, NumPy 2.4.2, SoundFile
+0.14.0, soxr 1.1.0, huggingface-hub 1.23.0, tokenizers 0.22.2, and
+safetensors 0.8.0. Accelerate 1.14.0 and Datasets 5.0.0 are recorded only as
+future training candidates. `qwen-asr`, vLLM, FlashAttention, serving
+frameworks, PEFT, Azure SDKs, and MLflow are not installed.
+
+Application and training code never installs or upgrades packages.
 
 ## Command-line usage
+
+Foundation and configuration checks:
 
 ```bash
 orato-asr --version
 orato-asr config show --config configs/local_tiny.yaml
 orato-asr config validate --config configs/local_tiny.yaml
 orato-asr doctor
+orato-asr doctor --ml --json reports/environment/environment_report.json
 ```
 
-The doctor performs only foundation checks: Python and package availability,
-repository directories, platform/WSL detection, and the current working
-directory. It does not inspect Qwen, CUDA, Azure, or training readiness.
-
-`scripts/preflight.py` invokes the same doctor implementation:
+Model inspection does not load or download anything unless `--load` is given:
 
 ```bash
-python scripts/preflight.py
-python scripts/preflight.py --config configs/local_tiny.yaml
+orato-asr model info --config configs/local_tiny.yaml
+orato-asr model info --config configs/local_tiny.yaml --load --device cuda
 ```
 
-With `--config`, preflight also validates the profile and reports its name,
-hardware mode, scale intent, GPU count, and distributed status. It does not
-perform model or training qualification.
+One-shot transcription accepts only a local WAV or FLAC file:
 
-## Running tests
+```bash
+orato-asr transcribe \
+  --audio /path/to/legal_non_pii.wav \
+  --config configs/local_tiny.yaml \
+  --device auto \
+  --output-json reports/environment/base_inference_result.json
+```
 
-After installing the development extra, run the offline test suite:
+`auto` selects CUDA when PyTorch reports it available and otherwise CPU.
+CPU always uses float32. CUDA `auto` uses bfloat16 when supported and float16
+otherwise. Explicit unavailable CUDA or unsupported precision fails without a
+CPU fallback. Hugging Face tokens remain environment-managed and are never
+stored in YAML or reports. `--offline` requires the pinned model to be present
+in the selected local cache.
+
+Inference preflight checks the exact pins, decoder libraries, model metadata,
+cache state, device, CUDA, and output writability without loading the model:
+
+```bash
+python scripts/preflight.py --inference --device auto \
+  --report-dir reports/environment
+python scripts/preflight.py --inference --device cuda --load-model \
+  --report-dir reports/environment
+```
+
+## Configuration profiles
+
+- `local_tiny.yaml`: RTX 3050/CPU qualification, at most 50 samples, inference
+  device `auto`.
+- `h100_smoke.yaml`: planned one-hour, single-H100 work; inference device
+  `cuda`.
+- `h100_100hr.yaml`: planned 100-hour, single-H100 work; inference device
+  `cuda`.
+- `h100_8gpu.yaml`: planned one-node/eight-H100 training capability. It remains
+  valid configuration but is rejected by the current single-process inference
+  command.
+
+All profiles pin the same native model/processor revisions, use precision
+`auto`, default to automatic language detection, cap generation at 256 new
+tokens, and keep the model cache under `outputs/`. Profile paths are strictly
+repository-relative and configuration loading never creates directories or
+rewrites YAML.
+
+## Tests and real-inference gate
 
 ```bash
 python -m pytest
 ```
 
-Tests require no internet, GPU, Azure account, Qwen model, audio, or external
-dataset.
+Unit tests require no model, network, GPU, or audio. A real integration test
+only runs when the owner supplies legal, non-PII audio:
 
-## Configuration profiles
+```bash
+ORATO_ASR_TEST_AUDIO=/path/to/legal_non_pii.wav \
+  python -m pytest -m integration -v
+```
 
-- `local_tiny.yaml`: local RTX 3050/CPU qualification, capped at 50 samples.
-- `h100_smoke.yaml`: planned single-H100 run with about one hour of audio.
-- `h100_100hr.yaml`: planned single-H100 run with about 100 hours of audio.
-- `h100_8gpu.yaml`: planned one-node, eight-H100 capability at roughly
-  1,000-hour scale.
+No audio is generated or committed. A skipped integration test is not evidence
+that transcription succeeded.
 
-Profiles use a strict schema. Unknown keys, unsafe output paths, non-positive
-numeric values, and inconsistent GPU/process settings fail with actionable
-errors. Loading or displaying a profile never creates directories or rewrites
-the source YAML. The profiles also lock Hindi to Devanagari, English to Latin
-script, Roman Hinglish as a non-primary target, valid short utterances as
-allowed, and raw-data mutation and synthetic data as disabled.
-
-## Security and data safety
+## Security and limitations
 
 Never commit credentials, private URLs, PII, audio, datasets, model weights,
-checkpoints, generated predictions, or local environment files. Raw source
-datasets are immutable and must never be modified by future training code.
+checkpoints, model caches, or generated predictions. Raw source datasets are
+immutable. Audio conversion occurs in memory and never changes the source.
 
-Copy `.env.example` only for local setup and keep real values in an ignored
-`.env` file. No Azure or Hugging Face credentials are required by the current
-foundation.
+The unquantized model's memory fit on an RTX 3050 6 GB and a roughly 8 GB host
+remains an explicit qualification question. A CUDA OOM is reported as a real
+blocker with no silent CPU retry. FlashAttention and quantization are excluded,
+and local success would not prove H100 training behavior.

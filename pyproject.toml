@@ -27,3 +27,6 @@ where = ["src"]
 addopts = "-ra"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+  "integration: requires the pinned ML stack, model access, and owner-supplied audio",
+]

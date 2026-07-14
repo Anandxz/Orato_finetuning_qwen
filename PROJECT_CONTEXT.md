@@ -21,9 +21,24 @@ The long-term product should be reusable across industries while retaining domai
 
 ## ASR objective
 
-The first model target is:
+The selected version-1 integration target is:
 
-`Qwen/Qwen3-ASR-0.6B`
+`Qwen/Qwen3-ASR-0.6B-hf`
+
+The repository uses the native Transformers track, not the older `qwen-asr`
+wrapper. Model and processor are both pinned to revision
+`6aa69c382e2b426eee1f5870d4c95859a74b6445`. The qualified dependency target
+is Python 3.12, PyTorch 2.11.0 with the official CUDA 12.8 or matching CPU
+wheel, Transformers 5.13.0, NumPy 2.4.2, SoundFile 0.14.0, soxr 1.1.0,
+huggingface-hub 1.23.0, tokenizers 0.22.2, and safetensors 0.8.0. The recorded
+upstream references are Qwen repository commit
+`7c6daf77a2421100f5fb066495372c00129d39ff` and Transformers v5.13.0 tag commit
+`6af945f436d85f2b0c5dff9b14feccd27b1d470b`.
+
+Base inference is intentionally unquantized and excludes FlashAttention,
+vLLM, serving frameworks, PEFT, Azure, and MLflow. Current inference is
+single-process. The RTX 3050 6 GB model-load and inference fit remain subject
+to measured qualification; failures must not silently fall back to CPU.
 
 The model should eventually recognize:
 

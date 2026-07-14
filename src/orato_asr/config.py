@@ -15,13 +15,18 @@ import yaml
 from .exceptions import ConfigError, ConfigValidationError
 from .paths import PathSafetyError, find_project_root, resolve_repository_path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 TRANSCRIPT_POLICY = "mixed_devanagari_hindi_latin_english_v1"
+INTEGRATION_TRACK = "transformers_native"
+MODEL_ID = "Qwen/Qwen3-ASR-0.6B-hf"
+MODEL_REVISION = "6aa69c382e2b426eee1f5870d4c95859a74b6445"
+PROCESSOR_REVISION = MODEL_REVISION
 
 _TOP_LEVEL_KEYS = {
     "schema_version",
     "profile",
     "model",
+    "inference",
     "transcript",
     "data",
     "hardware",
@@ -33,7 +38,14 @@ _TOP_LEVEL_KEYS = {
 
 _SECTION_KEYS = {
     "profile": {"name", "intent", "training_status"},
-    "model": {"id"},
+    "model": {"integration_track", "id", "revision", "processor_revision"},
+    "inference": {
+        "device",
+        "precision",
+        "offline",
+        "language_hint",
+        "max_new_tokens",
+    },
     "transcript": {
         "policy",
         "hindi_script",
@@ -70,7 +82,7 @@ _SECTION_KEYS = {
         "full_evaluation_enabled",
         "reporting_enabled",
     },
-    "paths": {"output_dir", "reports_dir"},
+    "paths": {"output_dir", "reports_dir", "model_cache_dir"},
 }
 
 
@@ -180,11 +192,54 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
     _non_empty_string(profile["intent"], "profile.intent")
     if profile["training_status"] != "not_implemented":
         raise ConfigError(
-            "profile.training_status must be 'not_implemented' in the foundation milestone"
+            "profile.training_status must be 'not_implemented' until training is added"
         )
 
     model = sections["model"]
-    _non_empty_string(model["id"], "model.id")
+    for field in ("integration_track", "id", "revision", "processor_revision"):
+        _non_empty_string(model[field], f"model.{field}")
+    if model["integration_track"] != INTEGRATION_TRACK:
+        raise ConfigError(
+            f"model.integration_track must be {INTEGRATION_TRACK!r}; received "
+            f"{model['integration_track']!r}"
+        )
+    expected_model = {
+        "id": MODEL_ID,
+        "revision": MODEL_REVISION,
+        "processor_revision": PROCESSOR_REVISION,
+    }
+    for field, expected in expected_model.items():
+        if model[field] != expected:
+            raise ConfigError(
+                f"model.{field} must be {expected!r} for the selected native track; "
+                f"received {model[field]!r}. Native and wrapper checkpoints must not "
+                "be mixed."
+            )
+
+    inference = sections["inference"]
+    device = _choice(
+        inference["device"],
+        "inference.device",
+        {"auto", "cpu", "cuda"},
+    )
+    precision = _choice(
+        inference["precision"],
+        "inference.precision",
+        {"auto", "float32", "float16", "bfloat16"},
+    )
+    _boolean(inference["offline"], "inference.offline")
+    language_hint = inference["language_hint"]
+    if language_hint is not None:
+        _non_empty_string(language_hint, "inference.language_hint")
+    max_new_tokens = _positive_int(
+        inference["max_new_tokens"], "inference.max_new_tokens"
+    )
+    if max_new_tokens > 4096:
+        raise ConfigError("inference.max_new_tokens must be at most 4096")
+    if device == "cpu" and precision in {"float16", "bfloat16"}:
+        raise ConfigError(
+            "inference.precision cannot use float16 or bfloat16 with CPU inference"
+        )
 
     transcript = sections["transcript"]
     if transcript["policy"] != TRANSCRIPT_POLICY:
@@ -237,7 +292,7 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
     )
     if synthetic_data_enabled:
         raise ConfigError(
-            "data.synthetic_data_enabled must be false in the foundation milestone"
+            "data.synthetic_data_enabled must be false in the current milestone"
         )
 
     hardware = sections["hardware"]
@@ -350,6 +405,7 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
     for key, allowed_directory in (
         ("output_dir", "outputs"),
         ("reports_dir", "reports"),
+        ("model_cache_dir", "outputs"),
     ):
         try:
             paths[key] = resolve_repository_path(
@@ -390,6 +446,16 @@ def _non_empty_string(value: object, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ConfigError(f"{field} must be a non-empty string")
     return value
+
+
+def _choice(value: object, field: str, choices: set[str]) -> str:
+    selected = _non_empty_string(value, field)
+    if selected not in choices:
+        options = ", ".join(sorted(choices))
+        raise ConfigError(
+            f"{field} must be one of {options}; received {selected!r}"
+        )
+    return selected
 
 
 def _boolean(value: object, field: str) -> bool:
