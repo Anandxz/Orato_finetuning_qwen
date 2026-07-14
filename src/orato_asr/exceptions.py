@@ -47,6 +47,22 @@ class InferenceOOMError(InferenceError):
     """Raised when CUDA exhausts device memory without a silent fallback."""
 
 
+class ManifestError(OratoASRError, ValueError):
+    """Raised when a canonical JSONL manifest cannot be read or written."""
+
+
+class ManifestValidationError(ManifestError):
+    """Raised when manifest records violate the canonical schema."""
+
+
+class EvaluationError(OratoASRError):
+    """Raised when baseline evaluation cannot complete safely."""
+
+
+class BaselineStoppedError(EvaluationError):
+    """Raised when baseline early-collapse protection stops a run."""
+
+
 # Descriptive aliases keep the public meaning clear without duplicate classes.
 ProjectConfigurationError = ConfigError
 ConfigurationValidationError = ConfigValidationError
@@ -62,6 +78,10 @@ __all__ = [
     "InferenceError",
     "InferenceOOMError",
     "ModelLoadError",
+    "ManifestError",
+    "ManifestValidationError",
+    "EvaluationError",
+    "BaselineStoppedError",
     "OratoASRError",
     "PathSafetyError",
     "PreflightError",

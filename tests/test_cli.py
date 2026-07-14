@@ -5,6 +5,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -52,7 +53,7 @@ def test_config_show_succeeds_for_every_profile(profile_path: Path) -> None:
     result = _run_cli("config", "show", "--config", str(profile_path))
 
     assert result.returncode == 0, result.stderr
-    assert "schema_version: 2" in result.stdout
+    assert "schema_version: 3" in result.stdout
     assert "Qwen/Qwen3-ASR-0.6B-hf" in result.stdout
     assert "integration_track: transformers_native" in result.stdout
     assert str(ROOT / "outputs") in result.stdout
@@ -122,6 +123,50 @@ def test_preflight_invalid_config_has_no_traceback(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert "Preflight configuration error:" in result.stderr
     assert "Traceback" not in result.stderr
+
+
+def test_data_commands_use_explicit_local_reports_and_exit_codes(tmp_path: Path) -> None:
+    train = tmp_path / "train.jsonl"
+    evaluation = tmp_path / "evaluation.jsonl"
+    train.write_text(
+        json.dumps({"audio_filepath": "audio/a.wav", "text": "hello", "recording_id": "same"}) + "\n",
+        encoding="utf-8",
+    )
+    evaluation.write_text(
+        json.dumps({"audio_filepath": "audio/a.wav", "text": "hello", "recording_id": "same"}) + "\n",
+        encoding="utf-8",
+    )
+    report = tmp_path / "validation.json"
+    result = _run_cli("data", "validate", "--manifest", str(train), "--report", str(report))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(report.read_text(encoding="utf-8"))["records"] == 1
+
+    overlap = _run_cli(
+        "data", "check-overlap", "--train-manifest", str(train), "--evaluation-manifest", str(evaluation)
+    )
+    assert overlap.returncode == 1
+    assert "audio_path" in overlap.stdout
+
+    malformed = tmp_path / "malformed.jsonl"
+    malformed.write_text("not json\n", encoding="utf-8")
+    invalid = _run_cli("data", "validate", "--manifest", str(malformed), "--report", str(tmp_path / "bad.json"))
+    assert invalid.returncode == 2
+    assert "Traceback" not in invalid.stderr
+
+
+def test_baseline_cli_returns_one_for_a_guard_stopped_run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    import orato_asr.cli as cli
+    import orato_asr.evaluation.baseline as baseline
+
+    fake_result = SimpleNamespace(
+        exit_code=1,
+        as_dict=lambda: {"status": "stopped", "stopped_reason": "early_collapse_identical_predictions"},
+    )
+    monkeypatch.setattr(cli, "load_config", lambda _: object())
+    monkeypatch.setattr(baseline, "run_baseline", lambda *_, **__: fake_result)
+
+    assert cli.main(["evaluate", "baseline", "--manifest", "unused.jsonl", "--run-name", "stopped"]) == 1
+    assert '"status": "stopped"' in capsys.readouterr().out
 
 
 def test_cli_help_exposes_native_inference_commands() -> None:

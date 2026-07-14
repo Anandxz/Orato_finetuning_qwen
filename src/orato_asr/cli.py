@@ -16,7 +16,7 @@ import yaml
 
 from .config import ConfigError, ProjectConfig, load_config
 from .environment import collect_environment
-from .exceptions import OratoASRError, PathSafetyError
+from .exceptions import EvaluationError, ManifestError, OratoASRError, PathSafetyError
 from .paths import find_project_root
 from .version import __version__
 
@@ -62,6 +62,58 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--offline", action="store_true")
     transcribe.add_argument("--max-new-tokens", type=int)
     transcribe.add_argument("--output-json", type=Path)
+
+    data = commands.add_parser("data", help="Validate, summarize, select, and compare JSONL manifests")
+    data_commands = data.add_subparsers(dest="data_command", required=True)
+    data_validate = data_commands.add_parser("validate", help="Validate a canonical JSONL manifest")
+    data_validate.add_argument("--manifest", required=True, type=Path)
+    data_validate.add_argument("--check-audio", action="store_true")
+    data_validate.add_argument("--hash-local-audio", action="store_true")
+    data_validate.add_argument("--duration-tolerance-seconds", type=float, default=0.25)
+    data_validate.add_argument("--report", required=True, type=Path)
+    data_summarize = data_commands.add_parser("summarize", help="Write a streaming manifest summary")
+    data_summarize.add_argument("--manifest", required=True, type=Path)
+    data_summarize.add_argument("--check-audio", action="store_true")
+    data_summarize.add_argument("--hash-local-audio", action="store_true")
+    data_summarize.add_argument("--output", required=True, type=Path)
+    data_select = data_commands.add_parser("select", help="Write a deterministic derived manifest")
+    data_select.add_argument("--manifest", required=True, type=Path)
+    data_select.add_argument("--output", required=True, type=Path)
+    data_select.add_argument("--max-samples", type=int)
+    duration_limit = data_select.add_mutually_exclusive_group()
+    duration_limit.add_argument("--max-seconds", type=float)
+    duration_limit.add_argument("--max-hours", type=float)
+    data_select.add_argument("--min-duration-seconds", type=float)
+    data_select.add_argument("--max-duration-seconds", type=float)
+    data_select.add_argument("--source")
+    data_select.add_argument("--domain")
+    data_select.add_argument("--language")
+    data_select.add_argument("--seed", type=int, default=0)
+    data_select.add_argument("--shuffled", action="store_true")
+    data_select.add_argument("--overwrite", action="store_true")
+    data_overlap = data_commands.add_parser("check-overlap", help="Check train/evaluation leakage")
+    data_overlap.add_argument("--train-manifest", required=True, type=Path)
+    data_overlap.add_argument("--evaluation-manifest", required=True, type=Path)
+    data_overlap.add_argument("--hash-local-audio", action="store_true")
+    data_overlap.add_argument("--disallow-speaker-overlap", action="store_true")
+    data_overlap.add_argument("--output", type=Path)
+
+    evaluate = commands.add_parser("evaluate", help="Run dependency-free baseline evaluation orchestration")
+    evaluate_commands = evaluate.add_subparsers(dest="evaluate_command", required=True)
+    baseline = evaluate_commands.add_parser("baseline", help="Evaluate local WAV/FLAC records with the pinned model")
+    baseline.add_argument("--manifest", required=True, type=Path)
+    baseline.add_argument("--config", default=DEFAULT_CONFIG)
+    baseline.add_argument("--run-name", required=True)
+    baseline.add_argument("--device", choices=("auto", "cpu", "cuda"))
+    baseline.add_argument("--max-samples", type=int)
+    duration_limit = baseline.add_mutually_exclusive_group()
+    duration_limit.add_argument("--max-seconds", type=float)
+    duration_limit.add_argument("--max-hours", type=float)
+    run_mode = baseline.add_mutually_exclusive_group()
+    run_mode.add_argument("--resume", action="store_true")
+    run_mode.add_argument("--overwrite", action="store_true")
+    baseline.add_argument("--error-policy", choices=("continue", "stop"))
+    baseline.add_argument("--offline", action="store_true")
     return parser
 
 
@@ -77,6 +129,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_model_info(args)
     if args.command == "transcribe":
         return _run_transcribe(args)
+    if args.command == "data":
+        return _run_data(args)
+    if args.command == "evaluate" and args.evaluate_command == "baseline":
+        return _run_baseline(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -168,6 +224,112 @@ def _run_transcribe(args: argparse.Namespace) -> int:
         print(f"Could not write transcription JSON: {exc}", file=sys.stderr)
         return 1
     return 0
+
+
+def _run_data(args: argparse.Namespace) -> int:
+    try:
+        project_root = find_project_root(Path.cwd())
+        from .data.manifest import write_json_atomic
+
+        if args.data_command == "validate":
+            from .data.validation import validate_manifest
+
+            report = validate_manifest(
+                args.manifest,
+                project_root=project_root,
+                check_audio=args.check_audio,
+                hash_local_audio=args.hash_local_audio,
+                duration_tolerance_seconds=args.duration_tolerance_seconds,
+            )
+            payload = report.as_dict()
+            write_json_atomic(payload, args.report)
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 2 if report.has_errors else 0
+        if args.data_command == "summarize":
+            from .data.summary import summarize_manifest
+
+            summary = summarize_manifest(
+                args.manifest,
+                project_root=project_root,
+                check_audio=args.check_audio,
+                hash_local_audio=args.hash_local_audio,
+            )
+            payload = summary.as_dict()
+            write_json_atomic(payload, args.output)
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 2 if payload["structural_errors"] or payload["media_errors"] else 0
+        if args.data_command == "select":
+            from .data.selection import SelectionOptions, select_manifest
+
+            maximum = args.max_seconds
+            if args.max_hours is not None:
+                maximum = args.max_hours * 3600
+            report = select_manifest(
+                args.manifest,
+                args.output,
+                options=SelectionOptions(
+                    max_samples=args.max_samples,
+                    max_duration_seconds=maximum,
+                    min_duration_seconds=args.min_duration_seconds,
+                    maximum_duration_seconds=args.max_duration_seconds,
+                    source=args.source,
+                    domain=args.domain,
+                    language=args.language,
+                    seed=args.seed,
+                    shuffled=args.shuffled,
+                ),
+                overwrite=args.overwrite,
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+        if args.data_command == "check-overlap":
+            from .data.overlap import check_overlap
+
+            report = check_overlap(
+                args.train_manifest,
+                args.evaluation_manifest,
+                project_root=project_root,
+                hash_local_audio=args.hash_local_audio,
+                disallow_speaker_overlap=args.disallow_speaker_overlap,
+            )
+            payload = report.as_dict()
+            if args.output is not None:
+                write_json_atomic(payload, args.output)
+            print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+            return 1 if report.prohibited_count else 0
+    except (ManifestError, PathSafetyError, OSError, ValueError) as exc:
+        print(f"Data command failed: {_sanitize_cli_error(exc)}", file=sys.stderr)
+        return 2
+    raise AssertionError(f"Unsupported data command: {args.data_command}")
+
+
+def _run_baseline(args: argparse.Namespace) -> int:
+    try:
+        config = load_config(args.config)
+        from .evaluation.baseline import BaselineOptions, run_baseline
+
+        max_duration = args.max_seconds
+        if args.max_hours is not None:
+            max_duration = args.max_hours * 3600
+        result = run_baseline(
+            args.manifest,
+            config,
+            options=BaselineOptions(
+                run_name=args.run_name,
+                device=args.device,
+                max_samples=args.max_samples,
+                max_duration_seconds=max_duration,
+                resume=True if args.resume else None,
+                overwrite=True if args.overwrite else None,
+                error_policy=args.error_policy,
+                offline=True if args.offline else None,
+            ),
+        )
+    except (ConfigError, EvaluationError, ManifestError, PathSafetyError, OSError, ValueError) as exc:
+        print(f"Baseline evaluation failed: {_sanitize_cli_error(exc)}", file=sys.stderr)
+        return 2
+    print(json.dumps(result.as_dict(), ensure_ascii=False, indent=2, sort_keys=True))
+    return result.exit_code
 
 
 def run_doctor(*, include_ml: bool = False, json_path: Path | None = None) -> int:
@@ -273,6 +435,14 @@ def _report_failure(label: str, error: BaseException, output_path: Path | None) 
         except OSError as write_error:
             print(f"Could not write failure JSON: {write_error}", file=sys.stderr)
     return 1
+
+
+def _sanitize_cli_error(error: BaseException) -> str:
+    """Use the existing URI/token-redaction policy for data/evaluation errors."""
+
+    from .models.qwen3_asr import sanitize_error
+
+    return sanitize_error(error)
 
 
 def _print_check(ok: bool, label: str, detail: str) -> int:

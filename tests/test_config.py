@@ -48,7 +48,7 @@ def test_every_committed_profile_loads_and_resolves_paths(profile_path: Path) ->
 def test_profiles_pin_native_model_and_inference_defaults() -> None:
     for profile_path in PROFILE_PATHS:
         values = load_config(profile_path, project_root=ROOT).as_dict()
-        assert values["schema_version"] == 2
+        assert values["schema_version"] == 3
         assert values["model"] == {
             "integration_track": "transformers_native",
             "id": "Qwen/Qwen3-ASR-0.6B-hf",
@@ -57,6 +57,21 @@ def test_profiles_pin_native_model_and_inference_defaults() -> None:
         }
         assert values["inference"]["max_new_tokens"] == 256
         assert values["inference"]["precision"] == "auto"
+        assert values["evaluation"]["baseline"] == {
+            "normalization": "standard",
+            "remove_punctuation": False,
+            "lowercase_latin": True,
+            "max_samples": 10,
+            "max_audio_hours": None,
+            "resume": False,
+            "overwrite": False,
+            "error_policy": "continue",
+            "early_check_samples": 5,
+            "blank_output_stop_threshold": 3,
+            "punctuation_only_stop_threshold": 3,
+            "identical_prediction_stop_threshold": 3,
+            "worst_example_count": 20,
+        }
 
 
 @pytest.mark.parametrize(
@@ -90,6 +105,36 @@ def test_boolean_is_not_accepted_as_an_integer(tmp_path: Path) -> None:
     profile["training"]["max_steps"] = True
 
     with pytest.raises(ConfigError, match="training.max_steps"):
+        load_config(_write_config(tmp_path, profile), project_root=ROOT)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("max_samples", 0),
+        ("max_samples", True),
+        ("max_audio_hours", 0),
+        ("early_check_samples", False),
+        ("worst_example_count", 0),
+        ("error_policy", "ignore"),
+    ],
+)
+def test_invalid_baseline_policy_values_fail(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    profile = _local_profile()
+    profile["evaluation"]["baseline"][field] = value
+
+    with pytest.raises(ConfigError, match=f"evaluation.baseline.{field}"):
+        load_config(_write_config(tmp_path, profile), project_root=ROOT)
+
+
+def test_baseline_resume_and_overwrite_are_mutually_exclusive(tmp_path: Path) -> None:
+    profile = _local_profile()
+    profile["evaluation"]["baseline"]["resume"] = True
+    profile["evaluation"]["baseline"]["overwrite"] = True
+
+    with pytest.raises(ConfigError, match="cannot both"):
         load_config(_write_config(tmp_path, profile), project_root=ROOT)
 
 

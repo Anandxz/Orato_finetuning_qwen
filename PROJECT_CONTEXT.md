@@ -87,6 +87,22 @@ Additional rules:
 - Large manifests should eventually support bounded-memory or streaming access rather than requiring all rows in memory.
 - Dataset licences, commercial-use rights, consent, and PII risk must be checked before production training. Exact permissions are not yet confirmed.
 
+### Current manifest boundary
+
+The repository now supports strict, UTF-8 JSONL manifests for local data work.
+Canonical rows require `audio_filepath` and `text`; optional `duration`,
+language/source/speaker/recording/domain/split identifiers, and nested
+`metadata` support deterministic validation, selection, and leakage checks.
+Absolute and repository-relative local audio paths are supported. Azure/Blob
+and HTTP(S) locators may be structurally represented but are never downloaded,
+authenticated, or accessed by this repository. Do not commit real Azure
+identifiers, private URLs, SAS tokens, manifests, audio, or data-derived
+reports.
+
+Duplicate normalized audio paths, content hashes when locally requested, and
+recording IDs are leakage; repeated transcript text is only informational.
+Speaker overlap is optional policy because its meaning depends on the dataset.
+
 ## Execution targets
 
 The project should use the same core Python path across execution environments. Hardware profiles may change precision, batch size, worker count, accumulation, launch method, and distributed settings, but they should not create separate training implementations.
@@ -207,6 +223,25 @@ Planned static graphs include:
 - Metrics by dataset, category, and duration.
 - Dataset sampling distribution and error-type distribution.
 
+### Current base-evaluation boundary
+
+The current baseline runner evaluates only the selected base model on local
+WAV/FLAC records. It uses one model instance per run, persists sample JSONL
+results incrementally, supports safe resume by deterministic manifest-line
+sample ID, and releases CUDA resources at completion. It reports raw and
+standard-normalized WER/CER, edit counts, exact/blank/punctuation/failure
+rates, timing, and real-time factor. Standard comparison uses NFKC,
+whitespace collapse, punctuation canonicalization, Latin lowercasing, and
+optional punctuation removal without transliterating Devanagari or
+code-switching.
+
+The default run is intentionally capped at ten samples. It records individual
+failures under a `continue` policy and stops early after five successful
+predictions if blank, punctuation-only, or identical output reaches the
+configured threshold. Fine-tuning evaluation, trained checkpoints, MER,
+entity metrics, graphs, Azure execution, and distributed evaluation remain
+unimplemented.
+
 MLflow is a likely experiment tracker for Azure, while CSV, JSON, Markdown, prediction JSONL, and PNG outputs should remain portable. The exact tracking implementation is deferred until the core model lifecycle works.
 
 ## Lessons from the failed notebook
@@ -240,7 +275,9 @@ Each milestone should deliver working, tested behavior. Do not replace implement
 
 ## Confirmed decisions
 
-- Initial model: `Qwen/Qwen3-ASR-0.6B`.
+- Initial native inference model: `Qwen/Qwen3-ASR-0.6B-hf` at the pinned
+  revision recorded above; the older wrapper checkpoint is a separate later
+  alternative.
 - Initial training direction: official supervised fine-tuning path first.
 - Canonical transcript style: Devanagari Hindi plus Latin-script English.
 - Roman Hinglish and inverse text normalization are separate concerns.

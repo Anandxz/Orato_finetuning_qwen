@@ -15,7 +15,7 @@ import yaml
 from .exceptions import ConfigError, ConfigValidationError
 from .paths import PathSafetyError, find_project_root, resolve_repository_path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 TRANSCRIPT_POLICY = "mixed_devanagari_hindi_latin_english_v1"
 INTEGRATION_TRACK = "transformers_native"
 MODEL_ID = "Qwen/Qwen3-ASR-0.6B-hf"
@@ -81,8 +81,25 @@ _SECTION_KEYS = {
         "validation_steps",
         "full_evaluation_enabled",
         "reporting_enabled",
+        "baseline",
     },
     "paths": {"output_dir", "reports_dir", "model_cache_dir"},
+}
+
+_BASELINE_EVALUATION_KEYS = {
+    "normalization",
+    "remove_punctuation",
+    "lowercase_latin",
+    "max_samples",
+    "max_audio_hours",
+    "resume",
+    "overwrite",
+    "error_policy",
+    "early_check_samples",
+    "blank_output_stop_threshold",
+    "punctuation_only_stop_threshold",
+    "identical_prediction_stop_threshold",
+    "worst_example_count",
 }
 
 
@@ -400,6 +417,66 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
         raise ConfigError(
             "Full evaluation requires evaluation.validation_enabled=true"
         )
+
+    baseline = _section(evaluation, "baseline")
+    _validate_keys(
+        baseline,
+        _BASELINE_EVALUATION_KEYS,
+        "section 'evaluation.baseline'",
+    )
+    if baseline["normalization"] != "standard":
+        raise ConfigError(
+            "evaluation.baseline.normalization must be 'standard' in this milestone"
+        )
+    _boolean(
+        baseline["remove_punctuation"],
+        "evaluation.baseline.remove_punctuation",
+    )
+    _boolean(
+        baseline["lowercase_latin"],
+        "evaluation.baseline.lowercase_latin",
+    )
+    baseline_max_samples = _optional_positive_int(
+        baseline["max_samples"], "evaluation.baseline.max_samples"
+    )
+    baseline_max_audio_hours = _optional_positive_number(
+        baseline["max_audio_hours"], "evaluation.baseline.max_audio_hours"
+    )
+    if baseline_max_samples is None and baseline_max_audio_hours is None:
+        raise ConfigError(
+            "At least one of evaluation.baseline.max_samples or "
+            "evaluation.baseline.max_audio_hours must be set"
+        )
+    resume = _boolean(baseline["resume"], "evaluation.baseline.resume")
+    overwrite = _boolean(baseline["overwrite"], "evaluation.baseline.overwrite")
+    if resume and overwrite:
+        raise ConfigError(
+            "evaluation.baseline.resume and evaluation.baseline.overwrite cannot both be true"
+        )
+    _choice(
+        baseline["error_policy"],
+        "evaluation.baseline.error_policy",
+        {"continue", "stop"},
+    )
+    early_check_samples = _positive_int(
+        baseline["early_check_samples"],
+        "evaluation.baseline.early_check_samples",
+    )
+    for key in (
+        "blank_output_stop_threshold",
+        "punctuation_only_stop_threshold",
+        "identical_prediction_stop_threshold",
+    ):
+        threshold = _positive_int(baseline[key], f"evaluation.baseline.{key}")
+        if threshold > early_check_samples:
+            raise ConfigError(
+                f"evaluation.baseline.{key} cannot exceed "
+                "evaluation.baseline.early_check_samples"
+            )
+    _positive_int(
+        baseline["worst_example_count"],
+        "evaluation.baseline.worst_example_count",
+    )
 
     paths = sections["paths"]
     for key, allowed_directory in (

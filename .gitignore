@@ -46,6 +46,10 @@ dist/
 *.zip
 datasets/
 data/
+# Keep the package's source-code data utilities; only root/local data folders
+# are ignored above.
+!src/orato_asr/data/
+!src/orato_asr/data/*.py
 
 # Models, checkpoints, and caches
 *.bin

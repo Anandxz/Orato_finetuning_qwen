@@ -368,7 +368,7 @@ def sanitize_error(error: BaseException) -> str:
     """Remove URLs and token-shaped values from expected CLI/report errors."""
 
     message = " ".join(str(error).split())
-    message = re.sub(r"https?://\S+", "[redacted-url]", message)
+    message = re.sub(r"(?:https?|azureml|azure|az|blob|abfs|abfss|wasb|wasbs)://\S+", "[redacted-url]", message)
     message = re.sub(r"\bhf_[A-Za-z0-9]{12,}\b", "[redacted-token]", message)
     return message[:1000]
 

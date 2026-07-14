@@ -1,4 +1,4 @@
-schema_version: 2
+schema_version: 3
 profile:
   name: h100_smoke
   intent: single_h100_one_hour_smoke
@@ -49,6 +49,20 @@ evaluation:
   validation_steps: 25
   full_evaluation_enabled: false
   reporting_enabled: true
+  baseline:
+    normalization: standard
+    remove_punctuation: false
+    lowercase_latin: true
+    max_samples: 10
+    max_audio_hours: null
+    resume: false
+    overwrite: false
+    error_policy: continue
+    early_check_samples: 5
+    blank_output_stop_threshold: 3
+    punctuation_only_stop_threshold: 3
+    identical_prediction_stop_threshold: 3
+    worst_example_count: 20
 paths:
   output_dir: outputs/h100_smoke
   reports_dir: reports/h100_smoke

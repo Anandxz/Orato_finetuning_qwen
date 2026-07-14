@@ -14,15 +14,18 @@ training, evaluation, and deployment context.
 
 ## Current status
 
-This milestone selects the native Transformers track and adds one-shot base
-inference for local WAV/FLAC audio. It provides:
+This milestone selects the native Transformers track, adds one-shot base
+inference, and adds a dependency-free manifest and base-evaluation pipeline.
+It provides:
 
-- Strict schema-v2 configuration profiles.
+- Strict schema-v3 configuration profiles, including bounded baseline policy.
 - Lazy environment, dependency, CUDA, and GPU reporting.
 - Non-mutating float32 audio decoding, mono downmixing, and 16 kHz resampling.
 - Explicit native processor/model loading and deterministic transcription.
-- CLI model inspection, ML doctor, inference preflight, and sanitized JSON.
-- Dependency-free unit tests plus an owner-audio-gated integration test.
+- Streaming JSONL validation, summary, selection, and split-overlap checks.
+- Raw and standard normalized WER/CER plus incremental baseline reports.
+- CLI model inspection, ML doctor, inference preflight, data commands, and sanitized JSON.
+- Dependency-free unit tests plus owner-audio/manifest-gated integration tests.
 
 The selected model is `Qwen/Qwen3-ASR-0.6B-hf` at revision
 `6aa69c382e2b426eee1f5870d4c95859a74b6445`, loaded only with native
@@ -30,7 +33,7 @@ The selected model is `Qwen/Qwen3-ASR-0.6B-hf` at revision
 `Qwen/Qwen3-ASR-0.6B`/`qwen-asr` wrapper is a separate alternative and must not
 be mixed with this integration.
 
-Fine-tuning, manifests, evaluation metrics, checkpoints, Azure, distributed
+Fine-tuning, checkpoints, Azure authentication/downloads, distributed
 inference, FlashAttention, quantization, and serving are not implemented.
 Configuration training values remain unqualified examples, not recommended
 hyperparameters or memory-fit claims.
@@ -42,6 +45,8 @@ configs/             Hardware and data-scale profiles
 requirements/        Explicit inference pins and later training candidates
 scripts/             Thin preflight entry point
 src/orato_asr/       Authoritative package and native inference code
+src/orato_asr/data/  Strict manifest and leakage-checking utilities
+src/orato_asr/evaluation/  Text metrics and incremental base evaluation
 tests/               Offline unit tests and gated integration test
 outputs/             Ignored model caches and generated artifacts
 reports/             Ignored sanitized qualification evidence
@@ -123,6 +128,63 @@ python scripts/preflight.py --inference --device cuda --load-model \
   --report-dir reports/environment
 ```
 
+## Manifests and base evaluation
+
+The canonical manifest is UTF-8 JSON Lines. Every row has exactly
+`audio_filepath` and `text` plus these optional top-level fields: `duration`,
+`language`, `source`, `speaker_id`, `recording_id`, `domain`, `split`, and
+`metadata`. Dataset-specific extensions belong only inside `metadata`.
+
+```json
+{"audio_filepath":"audio/call-0001.flac","text":"मुझे appointment reschedule करना है","duration":3.42,"language":"hi","source":"calls","recording_id":"call-0001","metadata":{"split_source":"owner-reviewed"}}
+```
+
+Local audio may be an absolute path or repository-relative path. `azureml:`,
+Blob-style, and HTTP(S) locators are accepted structurally but are never
+downloaded, authenticated, or validated locally. Do not put a SAS token or a
+private URL in a manifest intended for shared reports. This repository does
+not copy or document owner Azure identifiers.
+
+```bash
+orato-asr data validate --manifest /private/eval.jsonl --check-audio \
+  --report reports/evaluation/manifest_validation.json
+orato-asr data summarize --manifest /private/eval.jsonl \
+  --output reports/evaluation/manifest_summary.json
+orato-asr data select --manifest /private/eval.jsonl \
+  --output /private/eval_ten.jsonl --max-samples 10 --shuffled --seed 17
+orato-asr data check-overlap --train-manifest /private/train.jsonl \
+  --evaluation-manifest /private/eval.jsonl --hash-local-audio \
+  --output reports/evaluation/overlap.json
+```
+
+`data validate` returns `2` for malformed rows or invalid checked media.
+Overlap of normalized audio paths, local content hashes, or recording IDs is
+prohibited and returns `1`; repeated transcript text is informational. Speaker
+overlap becomes prohibited only with `--disallow-speaker-overlap`.
+
+Run a bounded base evaluation only against local readable WAV/FLAC records:
+
+```bash
+orato-asr evaluate baseline --manifest /private/eval.jsonl \
+  --config configs/local_tiny.yaml --run-name base-eval-001 \
+  --max-samples 10 --offline
+```
+
+Each run writes ignored files below `reports/<profile>/evaluation/<run-name>/`:
+the resolved config, summary, incrementally persisted predictions and
+failures, metrics JSON/CSV, worst examples, and a short README. Use `--resume`
+only with the same immutable manifest; use `--overwrite` explicitly to replace
+a run. The normal `continue` policy records individual failures and still
+completes. A blank, punctuation-only, or identical-prediction collapse in the
+first five successful samples stops the run and returns `1`.
+
+Metrics are decimal ratios, never unlabeled percentages. Raw WER/CER compare
+source text; standard WER/CER apply NFKC, whitespace collapse, punctuation
+canonicalization, and ASCII Latin lowercasing while preserving Devanagari,
+numbers, and code-switching. CER compares Unicode code points excluding
+whitespace. Punctuation remains by default and can be removed only through
+the configured baseline policy.
+
 ## Configuration profiles
 
 - `local_tiny.yaml`: RTX 3050/CPU qualification, at most 50 samples, inference
@@ -155,14 +217,24 @@ ORATO_ASR_TEST_AUDIO=/path/to/legal_non_pii.wav \
   python -m pytest -m integration -v
 ```
 
-No audio is generated or committed. A skipped integration test is not evidence
-that transcription succeeded.
+The bounded offline baseline integration check is separately owner-gated:
+
+```bash
+ORATO_ASR_TEST_MANIFEST=/path/to/legal_local_eval.jsonl \
+  python -m pytest -m integration -v
+```
+
+No audio, manifest, prediction, or Azure locator is generated or committed. A
+skipped integration test is not evidence that transcription or evaluation
+succeeded.
 
 ## Security and limitations
 
 Never commit credentials, private URLs, PII, audio, datasets, model weights,
-checkpoints, model caches, or generated predictions. Raw source datasets are
-immutable. Audio conversion occurs in memory and never changes the source.
+checkpoints, model caches, manifests, or generated predictions. Raw source
+datasets are immutable. Audio conversion occurs in memory and never changes
+the source. Reports retain transcript text and source paths for review, but
+strip URI query strings and must not contain secrets.
 
 The unquantized model's memory fit on an RTX 3050 6 GB and a roughly 8 GB host
 remains an explicit qualification question. A CUDA OOM is reported as a real
