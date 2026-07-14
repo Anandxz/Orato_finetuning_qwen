@@ -1,0 +1,45 @@
+schema_version: 1
+profile:
+  name: h100_smoke
+  intent: single_h100_one_hour_smoke
+  training_status: not_implemented
+model:
+  id: Qwen/Qwen3-ASR-0.6B
+transcript:
+  policy: mixed_devanagari_hindi_latin_english_v1
+  hindi_script: devanagari
+  english_script: latin
+  roman_hinglish_primary: false
+  short_utterances_allowed: true
+data:
+  max_samples: null
+  max_audio_hours: 1.0
+  raw_data_mutation_enabled: false
+  synthetic_data_enabled: false
+hardware:
+  device_preference: cuda
+  accelerator: h100
+  gpu_count: 1
+  process_count: 1
+  node_count: 1
+  distributed: false
+  rank_zero_writes: true
+  launcher: single_process
+training:
+  per_device_batch_size: 4
+  gradient_accumulation_steps: 4
+  max_steps: 100
+  full_parameter_fit_guaranteed: false
+checkpointing:
+  enabled: true
+  save_steps: 25
+  keep_last: 2
+  resume_enabled: true
+evaluation:
+  validation_enabled: true
+  validation_steps: 25
+  full_evaluation_enabled: false
+  reporting_enabled: true
+paths:
+  output_dir: outputs/h100_smoke
+  reports_dir: reports/h100_smoke

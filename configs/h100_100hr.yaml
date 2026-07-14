@@ -1,0 +1,45 @@
+schema_version: 1
+profile:
+  name: h100_100hr
+  intent: single_h100_selected_100_hour_run
+  training_status: not_implemented
+model:
+  id: Qwen/Qwen3-ASR-0.6B
+transcript:
+  policy: mixed_devanagari_hindi_latin_english_v1
+  hindi_script: devanagari
+  english_script: latin
+  roman_hinglish_primary: false
+  short_utterances_allowed: true
+data:
+  max_samples: null
+  max_audio_hours: 100.0
+  raw_data_mutation_enabled: false
+  synthetic_data_enabled: false
+hardware:
+  device_preference: cuda
+  accelerator: h100
+  gpu_count: 1
+  process_count: 1
+  node_count: 1
+  distributed: false
+  rank_zero_writes: true
+  launcher: single_process
+training:
+  per_device_batch_size: 8
+  gradient_accumulation_steps: 8
+  max_steps: 2000
+  full_parameter_fit_guaranteed: false
+checkpointing:
+  enabled: true
+  save_steps: 200
+  keep_last: 5
+  resume_enabled: true
+evaluation:
+  validation_enabled: true
+  validation_steps: 200
+  full_evaluation_enabled: true
+  reporting_enabled: true
+paths:
+  output_dir: outputs/h100_100hr
+  reports_dir: reports/h100_100hr

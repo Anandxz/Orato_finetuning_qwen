@@ -1,0 +1,45 @@
+schema_version: 1
+profile:
+  name: local_tiny
+  intent: local_pipeline_qualification
+  training_status: not_implemented
+model:
+  id: Qwen/Qwen3-ASR-0.6B
+transcript:
+  policy: mixed_devanagari_hindi_latin_english_v1
+  hindi_script: devanagari
+  english_script: latin
+  roman_hinglish_primary: false
+  short_utterances_allowed: true
+data:
+  max_samples: 50
+  max_audio_hours: null
+  raw_data_mutation_enabled: false
+  synthetic_data_enabled: false
+hardware:
+  device_preference: cuda_then_cpu
+  accelerator: rtx_3050_6gb
+  gpu_count: 1
+  process_count: 1
+  node_count: 1
+  distributed: false
+  rank_zero_writes: true
+  launcher: single_process
+training:
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 1
+  max_steps: 2
+  full_parameter_fit_guaranteed: false
+checkpointing:
+  enabled: false
+  save_steps: null
+  keep_last: null
+  resume_enabled: false
+evaluation:
+  validation_enabled: false
+  validation_steps: null
+  full_evaluation_enabled: false
+  reporting_enabled: true
+paths:
+  output_dir: outputs/local_tiny
+  reports_dir: reports/local_tiny

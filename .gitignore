@@ -1,0 +1,82 @@
+# Local environments and secrets
+.env
+.env.local
+.env.*
+!.env.example
+.venv/
+venv/
+env/
+
+# Python and test caches
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Editors, notebooks, and local knowledge tools
+.idea/
+.vscode/
+.obsidian/
+*.swp
+*.swo
+*~
+.ipynb_checkpoints/
+
+# Audio and datasets
+*.aac
+*.flac
+*.m4a
+*.mp3
+*.ogg
+*.opus
+*.wav
+*.wma
+*.arrow
+*.parquet
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+datasets/
+data/
+
+# Models, checkpoints, and caches
+*.bin
+*.ckpt
+*.onnx
+*.pt
+*.pth
+*.safetensors
+checkpoints/
+checkpoint-*/
+.cache/huggingface/
+.huggingface/
+
+# Experiment systems and generated artifacts
+.azure/
+.azureml/
+azureml-logs/
+mlruns/
+runs/
+tensorboard/
+lightning_logs/
+predictions/
+plots/
+reports/*
+!reports/.gitkeep
+outputs/*
+!outputs/.gitkeep
+
+# Temporary and operating-system files
+*.tmp
+*.temp
+.DS_Store
+Thumbs.db
+desktop.ini
+*:Zone.Identifier
