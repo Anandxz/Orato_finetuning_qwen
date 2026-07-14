@@ -63,6 +63,26 @@ class BaselineStoppedError(EvaluationError):
     """Raised when baseline early-collapse protection stops a run."""
 
 
+class TrainingError(OratoASRError):
+    """Raised when the explicitly requested training path cannot proceed safely."""
+
+
+class WrapperCompatibilityError(TrainingError):
+    """Raised when qwen-asr wrapper targets, labels, or model structure disagree."""
+
+
+class TrainingOOMError(TrainingError):
+    """Raised when a training stage exhausts CUDA memory without fallback."""
+
+
+class MemorySafetyError(TrainingError):
+    """Raised before a stage would cross a configured memory guard."""
+
+
+class AdapterVerificationError(TrainingError):
+    """Raised when an adapter cannot be safely loaded and qualified."""
+
+
 # Descriptive aliases keep the public meaning clear without duplicate classes.
 ProjectConfigurationError = ConfigError
 ConfigurationValidationError = ConfigValidationError
@@ -82,6 +102,11 @@ __all__ = [
     "ManifestValidationError",
     "EvaluationError",
     "BaselineStoppedError",
+    "TrainingError",
+    "WrapperCompatibilityError",
+    "TrainingOOMError",
+    "MemorySafetyError",
+    "AdapterVerificationError",
     "OratoASRError",
     "PathSafetyError",
     "PreflightError",

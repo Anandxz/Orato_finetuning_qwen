@@ -11,7 +11,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "configs"
-PROFILE_PATHS = sorted(CONFIG_DIR.glob("*.yaml"))
+PROFILE_PATHS = sorted(
+    path
+    for path in CONFIG_DIR.glob("*.yaml")
+    if not path.name.startswith("train_wrapper_")
+)
 
 
 def _run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import re
 import unicodedata
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -56,7 +56,9 @@ class ManifestRecord:
     recording_id: str | None = None
     domain: str | None = None
     split: str | None = None
-    metadata: Mapping[str, Any] = MappingProxyType({})
+    metadata: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     manifest_path: Path | None = None
     line_number: int | None = None
 

@@ -21,6 +21,8 @@ from .paths import find_project_root
 from .version import __version__
 
 DEFAULT_CONFIG = "configs/local_tiny.yaml"
+DEFAULT_WRAPPER_CONFIG = "configs/train_wrapper_lora_laptop_smoke.yaml"
+DEFAULT_WRAPPER_COMPATIBILITY_REPORT = "wrapper_0.6b_compatibility.json"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -114,6 +116,69 @@ def build_parser() -> argparse.ArgumentParser:
     run_mode.add_argument("--overwrite", action="store_true")
     baseline.add_argument("--error-policy", choices=("continue", "stop"))
     baseline.add_argument("--offline", action="store_true")
+
+    wrapper = commands.add_parser(
+        "wrapper", help="Inspect the isolated qwen-asr wrapper backend"
+    )
+    wrapper_commands = wrapper.add_subparsers(dest="wrapper_command", required=True)
+    wrapper_inspect = wrapper_commands.add_parser(
+        "inspect", help="Load the wrapper and inventory exact LoRA candidates"
+    )
+    wrapper_inspect.add_argument("--config", default=DEFAULT_WRAPPER_CONFIG)
+    wrapper_inspect.add_argument("--offline", action="store_true")
+    wrapper_inspect.add_argument("--json", type=Path)
+
+    train = commands.add_parser(
+        "train", help="Run isolated wrapper compatibility and LoRA smoke checks"
+    )
+    train_commands = train.add_subparsers(dest="train_command", required=True)
+    wrapper_preflight = train_commands.add_parser(
+        "wrapper-preflight", help="Validate wrapper targets and finite base loss"
+    )
+    wrapper_preflight.add_argument("--config", default=DEFAULT_WRAPPER_CONFIG)
+    wrapper_preflight.add_argument("--train-manifest", required=True, type=Path)
+    wrapper_preflight.add_argument("--eval-manifest", type=Path)
+    wrapper_preflight.add_argument("--device", choices=("cuda",), default="cuda")
+    wrapper_preflight.add_argument("--offline", action="store_true")
+    wrapper_preflight.add_argument("--json", type=Path)
+
+    one_step = train_commands.add_parser(
+        "lora-one-step", help="Run exactly one verified adapter optimizer step"
+    )
+    one_step.add_argument("--config", default=DEFAULT_WRAPPER_CONFIG)
+    one_step.add_argument("--train-manifest", required=True, type=Path)
+    one_step.add_argument("--run-name", required=True)
+    one_step.add_argument("--device", choices=("cuda",), default="cuda")
+    one_step.add_argument("--offline", action="store_true")
+    one_step.add_argument("--output-json", type=Path)
+
+    smoke = train_commands.add_parser(
+        "lora-smoke", help="Run a bounded five- or ten-step LoRA smoke"
+    )
+    smoke.add_argument("--config", default=DEFAULT_WRAPPER_CONFIG)
+    smoke.add_argument("--train-manifest", required=True, type=Path)
+    smoke.add_argument("--eval-manifest", type=Path)
+    smoke.add_argument("--run-name", required=True)
+    smoke.add_argument("--max-optimizer-steps", type=int, choices=(5, 10), default=5)
+    smoke.add_argument("--device", choices=("cuda",), default="cuda")
+    smoke.add_argument("--offline", action="store_true")
+    smoke.add_argument("--output-json", type=Path)
+    smoke.add_argument(
+        "--allow-without-one-step-evidence",
+        action="store_true",
+        help="Development-only override; the default requires successful one-step evidence",
+    )
+
+    verify = train_commands.add_parser(
+        "verify-adapter", help="Fresh-process adapter reload and bounded evaluation"
+    )
+    verify.add_argument("--config", default=DEFAULT_WRAPPER_CONFIG)
+    verify.add_argument("--run-dir", required=True, type=Path)
+    verify.add_argument("--eval-manifest", required=True, type=Path)
+    verify.add_argument("--max-samples", type=int, choices=(1, 2, 3), default=3)
+    verify.add_argument("--device", choices=("cuda",), default="cuda")
+    verify.add_argument("--offline", action="store_true")
+    verify.add_argument("--output-json", type=Path)
     return parser
 
 
@@ -133,6 +198,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_data(args)
     if args.command == "evaluate" and args.evaluate_command == "baseline":
         return _run_baseline(args)
+    if args.command == "wrapper" and args.wrapper_command == "inspect":
+        return _run_wrapper_inspect(args)
+    if args.command == "train":
+        return _run_train(args)
     parser.error(f"Unknown command: {args.command}")
     return 2
 
@@ -332,6 +401,102 @@ def _run_baseline(args: argparse.Namespace) -> int:
     return result.exit_code
 
 
+def _run_wrapper_inspect(args: argparse.Namespace) -> int:
+    try:
+        from .training import load_wrapper_training_config
+        from .training.runner import inspect_wrapper
+
+        config = load_wrapper_training_config(args.config)
+        payload = inspect_wrapper(config, offline=args.offline)
+        _emit_json(payload, args.json)
+    except ConfigError as exc:
+        return _report_failure(
+            "Wrapper configuration error", exc, args.json, exit_code=2
+        )
+    except (OratoASRError, OSError) as exc:
+        return _report_failure("Wrapper inspection failed", exc, args.json)
+    return 0
+
+
+def _run_train(args: argparse.Namespace) -> int:
+    output_path = getattr(args, "json", None) or getattr(args, "output_json", None)
+    try:
+        from .training import load_wrapper_training_config
+        from .training.runner import (
+            run_lora_training,
+            run_wrapper_preflight,
+            verify_adapter,
+        )
+
+        config = load_wrapper_training_config(args.config)
+        if args.train_command == "wrapper-preflight":
+            if output_path is None:
+                output_path = (
+                    Path(config.as_dict()["paths"]["reports_root"])
+                    / DEFAULT_WRAPPER_COMPATIBILITY_REPORT
+                )
+            payload = run_wrapper_preflight(
+                config,
+                train_manifest=args.train_manifest,
+                eval_manifest=args.eval_manifest,
+                offline=args.offline,
+            )
+        elif args.train_command == "lora-one-step":
+            payload = run_lora_training(
+                config,
+                train_manifest=args.train_manifest,
+                run_name=args.run_name,
+                optimizer_steps=1,
+                one_step_mode=True,
+                offline=args.offline,
+            )
+        elif args.train_command == "lora-smoke":
+            if args.eval_manifest is not None:
+                from .data.overlap import check_overlap
+
+                overlap = check_overlap(
+                    args.train_manifest,
+                    args.eval_manifest,
+                    project_root=config.project_root,
+                    hash_local_audio=True,
+                )
+                if overlap.prohibited_count:
+                    raise EvaluationError(
+                        f"Train/evaluation overlap has {overlap.prohibited_count} prohibited finding(s)"
+                    )
+            payload = run_lora_training(
+                config,
+                train_manifest=args.train_manifest,
+                run_name=args.run_name,
+                optimizer_steps=args.max_optimizer_steps,
+                one_step_mode=False,
+                offline=args.offline,
+                allow_without_one_step_evidence=args.allow_without_one_step_evidence,
+            )
+        elif args.train_command == "verify-adapter":
+            payload = verify_adapter(
+                config,
+                run_directory=args.run_dir,
+                eval_manifest=args.eval_manifest,
+                max_samples=args.max_samples,
+                offline=args.offline,
+            )
+        else:  # pragma: no cover - argparse owns the choices.
+            raise AssertionError(f"Unsupported train command: {args.train_command}")
+        _emit_json(payload, output_path)
+    except ConfigError as exc:
+        return _report_failure(
+            "Training configuration error", exc, output_path, exit_code=2
+        )
+    except (ManifestError, PathSafetyError, ValueError) as exc:
+        return _report_failure(
+            "Training input error", exc, output_path, exit_code=2
+        )
+    except (OratoASRError, OSError) as exc:
+        return _report_failure("Training command failed", exc, output_path)
+    return 0
+
+
 def run_doctor(*, include_ml: bool = False, json_path: Path | None = None) -> int:
     """Run foundation checks and optionally inspect the pinned ML environment."""
 
@@ -425,7 +590,13 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
     )
 
 
-def _report_failure(label: str, error: BaseException, output_path: Path | None) -> int:
+def _report_failure(
+    label: str,
+    error: BaseException,
+    output_path: Path | None,
+    *,
+    exit_code: int = 1,
+) -> int:
     from .models.qwen3_asr import sanitize_error
     message = sanitize_error(error)
     print(f"{label}: {message}", file=sys.stderr)
@@ -434,7 +605,7 @@ def _report_failure(label: str, error: BaseException, output_path: Path | None) 
             _write_json(output_path, {"status": "error", "error": message})
         except OSError as write_error:
             print(f"Could not write failure JSON: {write_error}", file=sys.stderr)
-    return 1
+    return exit_code
 
 
 def _sanitize_cli_error(error: BaseException) -> str:

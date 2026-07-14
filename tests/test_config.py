@@ -11,7 +11,11 @@ from orato_asr.config import ConfigError, ProjectConfig, load_config
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "configs"
-PROFILE_PATHS = sorted(CONFIG_DIR.glob("*.yaml"))
+PROFILE_PATHS = sorted(
+    path
+    for path in CONFIG_DIR.glob("*.yaml")
+    if not path.name.startswith("train_wrapper_")
+)
 
 
 def _local_profile() -> dict[str, Any]:

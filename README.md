@@ -14,8 +14,9 @@ training, evaluation, and deployment context.
 
 ## Current status
 
-This milestone selects the native Transformers track, adds one-shot base
-inference, and adds a dependency-free manifest and base-evaluation pipeline.
+The project retains native Transformers inference and now also contains an
+isolated, memory-guarded wrapper-LoRA smoke path. The backends use different
+checkpoints and environments and are never loaded in one process.
 It provides:
 
 - Strict schema-v3 configuration profiles, including bounded baseline policy.
@@ -26,17 +27,22 @@ It provides:
 - Raw and standard normalized WER/CER plus incremental baseline reports.
 - CLI model inspection, ML doctor, inference preflight, data commands, and sanitized JSON.
 - Dependency-free unit tests plus owner-audio/manifest-gated integration tests.
+- Official wrapper target/masking validation, exact decoder-only LoRA targeting,
+  adapter-only checkpoints, and fresh-process verification commands.
 
 The selected model is `Qwen/Qwen3-ASR-0.6B-hf` at revision
 `6aa69c382e2b426eee1f5870d4c95859a74b6445`, loaded only with native
 `AutoProcessor` and `AutoModelForMultimodalLM` classes. The older
-`Qwen/Qwen3-ASR-0.6B`/`qwen-asr` wrapper is a separate alternative and must not
-be mixed with this integration.
+`Qwen/Qwen3-ASR-0.6B`/`qwen-asr` wrapper is a separate backend and must not be
+mixed with native inference; it is used only by the isolated training path.
 
-Fine-tuning, checkpoints, Azure authentication/downloads, distributed
-inference, FlashAttention, quantization, and serving are not implemented.
-Configuration training values remain unqualified examples, not recommended
-hyperparameters or memory-fit claims.
+Native `-hf` fine-tuning remains disabled because its pinned label construction
+is incorrect. Wrapper LoRA is a controlled project experiment, not an official
+Qwen LoRA recipe. The exact wrapper inference, collator, base-loss, and LoRA
+forward stages have been qualified locally; a real optimizer step and adapter
+verification still require a separate owner-supplied training manifest.
+Azure, distributed training, FlashAttention, quantization, and serving remain
+unimplemented.
 
 ## Repository structure
 
@@ -47,6 +53,7 @@ scripts/             Thin preflight entry point
 src/orato_asr/       Authoritative package and native inference code
 src/orato_asr/data/  Strict manifest and leakage-checking utilities
 src/orato_asr/evaluation/  Text metrics and incremental base evaluation
+src/orato_asr/training/  Isolated wrapper target, LoRA, memory, and reporting path
 tests/               Offline unit tests and gated integration test
 outputs/             Ignored model caches and generated artifacts
 reports/             Ignored sanitized qualification evidence
@@ -81,6 +88,76 @@ future training candidates. `qwen-asr`, vLLM, FlashAttention, serving
 frameworks, PEFT, Azure SDKs, and MLflow are not installed.
 
 Application and training code never installs or upgrades packages.
+
+## Wrapper LoRA laptop smoke
+
+Training uses `Qwen/Qwen3-ASR-0.6B` revision
+`5eb144179a02acc5e5ba31e748d22b0cf3e303b0` with `qwen-asr==0.0.6`,
+Transformers 4.57.6, Accelerate 1.12.0, and PEFT 0.19.1. Follow the separate
+environment instructions in [requirements/README.md](requirements/README.md);
+do not install this stack into `.venv-inference`.
+
+The runtime converts canonical records without rewriting them. Hindi and
+Hindi-primary Hinglish use the exact target
+`language Hindi<asr_text><raw transcript>`; English uses `language
+English<asr_text>...`, and `None` is used only when language metadata is truly
+unavailable. Batch size is fixed at one because the official prefix-mask
+algorithm is not correct for variable-length left-padded batches.
+Optimizer commands reject any row explicitly labelled as a validation,
+development, evaluation, or test split; rows with a split label must use
+`train` or `training`.
+
+```bash
+export ORATO_ASR_TRAIN_MANIFEST=/path/to/legal_local_train.jsonl
+export ORATO_ASR_EVAL_MANIFEST=/path/to/legal_local_eval.jsonl
+export HF_HUB_DISABLE_XET=1
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export TOKENIZERS_PARALLELISM=false
+export OMP_NUM_THREADS=4
+export MKL_NUM_THREADS=4
+
+orato-asr wrapper inspect --offline
+orato-asr train wrapper-preflight --offline \
+  --config configs/train_wrapper_lora_laptop_smoke.yaml \
+  --train-manifest "$ORATO_ASR_TRAIN_MANIFEST" \
+  --eval-manifest "$ORATO_ASR_EVAL_MANIFEST" --device cuda
+
+orato-asr train lora-one-step --offline \
+  --config configs/train_wrapper_lora_laptop_smoke.yaml \
+  --train-manifest "$ORATO_ASR_TRAIN_MANIFEST" \
+  --run-name qwen06b_lora_one_step
+
+orato-asr train lora-smoke --offline \
+  --config configs/train_wrapper_lora_laptop_smoke.yaml \
+  --train-manifest "$ORATO_ASR_TRAIN_MANIFEST" \
+  --eval-manifest "$ORATO_ASR_EVAL_MANIFEST" \
+  --run-name qwen06b_lora_laptop_smoke --max-optimizer-steps 5
+
+orato-asr train verify-adapter --offline \
+  --config configs/train_wrapper_lora_laptop_smoke.yaml \
+  --run-dir outputs/training/qwen06b_lora_laptop_smoke \
+  --eval-manifest "$ORATO_ASR_EVAL_MANIFEST" --max-samples 3 --device cuda
+```
+
+The LoRA allowlist contains only all 28 decoder layers' exact
+`thinker.model.layers.<N>.self_attn.{q_proj,v_proj}` paths. The audio encoder,
+audio projections, MLP, embeddings, and output head remain frozen. Training
+stops on non-finite values, unexpected trainables, memory guards, or CUDA OOM;
+there is no CPU, disk, quantization, or QLoRA fallback.
+
+The one-step command requires a successful compatibility report for the exact
+same immutable manifest. It proves the LoRA no-gradient forward and a separate
+backward-without-optimizer stage before allocating AdamW. The five-step command
+then requires matching one-step evidence; the development override does not
+weaken target, trainability, or memory checks. A ten-step run additionally
+requires a matching five-step run with finite metrics, memory below the guard,
+adapter save, and successful fresh-process verification; it is never started
+automatically.
+
+Generated adapter-only runs are ignored below `outputs/training/<run-name>/`;
+sanitized JSON/CSV, a per-run README, and `CTO_SMOKE_SUMMARY.md` are ignored below
+`reports/training/<run-name>/`. A five-step smoke demonstrates plumbing only,
+not accuracy improvement, full-dataset coverage, or production readiness.
 
 ## Command-line usage
 
@@ -224,6 +301,16 @@ ORATO_ASR_TEST_MANIFEST=/path/to/legal_local_eval.jsonl \
   python -m pytest -m integration -v
 ```
 
+The real wrapper compatibility integration test is gated by the owner training
+manifest and must run from `.venv-qwen-wrapper`:
+
+```bash
+ORATO_ASR_TRAIN_MANIFEST=/path/to/legal_local_train.jsonl \
+ORATO_ASR_EVAL_MANIFEST=/path/to/legal_local_eval.jsonl \
+  python -m pytest -m integration -v \
+  tests/test_integration_wrapper_training.py
+```
+
 No audio, manifest, prediction, or Azure locator is generated or committed. A
 skipped integration test is not evidence that transcription or evaluation
 succeeded.
@@ -236,7 +323,9 @@ datasets are immutable. Audio conversion occurs in memory and never changes
 the source. Reports retain transcript text and source paths for review, but
 strip URI query strings and must not contain secrets.
 
-The unquantized model's memory fit on an RTX 3050 6 GB and a roughly 8 GB host
-remains an explicit qualification question. A CUDA OOM is reported as a real
-blocker with no silent CPU retry. FlashAttention and quantization are excluded,
-and local success would not prove H100 training behavior.
+The unquantized wrapper model, inference, official collator, finite base loss,
+and LoRA finite forward fit on this RTX 3050 6 GB qualification machine. LoRA
+backward and AdamW fit remain unproven until a legal local training manifest is
+supplied. A CUDA OOM is reported as a real blocker with no silent CPU retry.
+FlashAttention and quantization are excluded, and local success would not prove
+H100 training behavior.

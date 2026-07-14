@@ -25,8 +25,8 @@ The selected version-1 integration target is:
 
 `Qwen/Qwen3-ASR-0.6B-hf`
 
-The repository uses the native Transformers track, not the older `qwen-asr`
-wrapper. Model and processor are both pinned to revision
+The repository uses the native Transformers track for inference. Model and
+processor are both pinned to revision
 `6aa69c382e2b426eee1f5870d4c95859a74b6445`. The qualified dependency target
 is Python 3.12, PyTorch 2.11.0 with the official CUDA 12.8 or matching CPU
 wheel, Transformers 5.13.0, NumPy 2.4.2, SoundFile 0.14.0, soxr 1.1.0,
@@ -37,8 +37,12 @@ upstream references are Qwen repository commit
 
 Base inference is intentionally unquantized and excludes FlashAttention,
 vLLM, serving frameworks, PEFT, Azure, and MLflow. Current inference is
-single-process. The RTX 3050 6 GB model-load and inference fit remain subject
-to measured qualification; failures must not silently fall back to CPU.
+single-process. Native one-shot CUDA/BF16 model load and inference have been
+qualified on the RTX 3050 6 GB; failures must never silently fall back to CPU.
+
+Training is a separate coherent backend using the non-`-hf`
+`Qwen/Qwen3-ASR-0.6B` wrapper checkpoint. It never mixes wrapper classes,
+processor inputs, or dependencies into native inference.
 
 The model should eventually recognize:
 
@@ -142,9 +146,9 @@ The approximately 1,000-hour scale is a capability target, not a confirmed first
 
 Version 1 must follow the current official Qwen3-ASR supervised fine-tuning implementation as closely as practical. Before implementation, verify the exact official repository, training entry point, dataset schema, package compatibility, model revision, and checkpoint lifecycle against current primary documentation.
 
-The first working vertical slice should not introduce:
+The official target, processor, masking, and forward contract must be proven
+before any project adaptation. The training path must not introduce:
 
-- Custom LoRA or PEFT.
 - Automatic LoRA target discovery.
 - A custom ASR architecture.
 - A custom processor.
@@ -152,7 +156,13 @@ The first working vertical slice should not introduce:
 - Unverified label masking or collation.
 - Notebook-only training logic.
 
-LoRA may be investigated after official supervised fine-tuning completes a tiny train-save-fresh-reload-infer lifecycle. It must be a controlled research branch, not a fallback silently selected at runtime.
+The pinned native Transformers label helper failed that contract, so it is not
+used for training. The isolated wrapper backend preserves Qwen's official
+supervised target and collator while applying an explicitly approved,
+full-path text-attention Q/V LoRA allowlist for the 6 GB laptop qualification.
+This is a controlled project experiment, not an official Qwen LoRA recipe or
+a runtime fallback. It is not accepted until backward, adapter-only save, a
+fresh-process reload, and fixed-sample inference all pass.
 
 ## Training engineering principles
 
@@ -279,6 +289,22 @@ Each milestone should deliver working, tested behavior. Do not replace implement
   revision recorded above; the older wrapper checkpoint is a separate later
   alternative.
 - Initial training direction: official supervised fine-tuning path first.
+- Native Transformers 5.13 label construction is not used for training. The
+  separate training backend is `Qwen/Qwen3-ASR-0.6B` revision
+  `5eb144179a02acc5e5ba31e748d22b0cf3e303b0` with `qwen-asr==0.0.6`,
+  Transformers 4.57.6, Accelerate 1.12.0, and PEFT 0.19.1 in its own
+  environment. The inspected `qwen-asr` 0.0.6 wheel source matches Qwen commit
+  `7c6daf77a2421100f5fb066495372c00129d39ff`; the qualified wheel SHA-256 is
+  `b9c55a38413298f3a990a4475467399daec6e8f4172363053fc42e2166c2dfd3`.
+- The wrapper's official supervised contract has been confirmed on a legal
+  owner sample: prompt/audio prefix masked with `-100`, padding masked, and
+  `language Hindi<asr_text><raw transcript>` plus EOS supervised. A real
+  finite base loss and a LoRA-injected no-gradient forward passed on the RTX
+  3050. No optimizer step or adapter verification has been claimed because an
+  owner training manifest was not supplied to this milestone run.
+- Laptop LoRA is a bounded project experiment using exact decoder-attention
+  Q/V paths, not an official Qwen LoRA recipe. It does not replace the official
+  target/collator contract or authorize QLoRA.
 - Canonical transcript style: Devanagari Hindi plus Latin-script English.
 - Roman Hinglish and inverse text normalization are separate concerns.
 - Python modules and command-line jobs own the training implementation.
@@ -291,7 +317,8 @@ Each milestone should deliver working, tested behavior. Do not replace implement
 
 ## Deferred decisions
 
-- Whether LoRA/PEFT provides a useful later alternative to full supervised fine-tuning.
+- Whether longer LoRA runs improve owner-set metrics after the one/five-step
+  lifecycle and fresh-process adapter verification are completed.
 - Exact distributed launcher and optimization stack for H100 x8.
 - Exact MLflow/Azure tracking implementation.
 - Streaming-serving architecture and endpointing.
@@ -302,8 +329,10 @@ Each milestone should deliver working, tested behavior. Do not replace implement
 
 ## Unknowns requiring validation
 
-- The current official Qwen3-ASR training API, compatible versions, repository commit, and model revision.
-- Whether the full official training step fits or partially fits on the RTX 3050.
+- Whether verified wrapper-LoRA backward plus AdamW fits on the RTX 3050 with
+  an owner-approved local training manifest.
+- Whether full-parameter official wrapper training fits any useful local slice;
+  no such laptop claim is currently intended.
 - Exact Azure workspace, compute SKU availability, quota, identity, storage, and cost constraints.
 - Actual dataset inventory, file schema, verified audio hours, licences, consent, PII status, and split metadata.
 - The initial human-verified evaluation set and acceptance thresholds.
