@@ -1,0 +1,19 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+
+name: orato-qwen3-asr-wrapper-lora
+version: 2
+
+description: >
+  Qwen3-ASR wrapper LoRA environment using an isolated Python venv,
+  PyTorch 2.11, CUDA 12.8, qwen-asr 0.0.6 and PEFT.
+
+build:
+  path: ../docker/wrapper-lora
+  dockerfile_path: Dockerfile
+
+tags:
+  project: orato-qwen3-asr
+  backend: qwen-asr-wrapper
+  purpose: lora-training
+  pytorch: "2.11.0"
+  cuda: "12.8"

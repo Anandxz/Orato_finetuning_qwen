@@ -1,0 +1,16 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+
+type: command
+
+display_name: test-qwen-wrapper-environment-cpu
+experiment_name: orato-environment-qualification
+
+code: ../..
+
+command: >-
+  PYTHONPATH=src
+  python azureml/scripts/test_environment.py
+
+environment: azureml:orato-qwen3-asr-wrapper-lora:2
+
+compute: azureml:support2
