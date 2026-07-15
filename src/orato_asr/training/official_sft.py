@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import unicodedata
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -193,9 +194,13 @@ def collate_official_single(
         skip_special_tokens=False,
         clean_up_tokenization_spaces=False,
     )
-    if decoded_target != target:
+    byte_exact_decode = decoded_target == target
+    canonical_decode = unicodedata.normalize("NFC", decoded_target) == unicodedata.normalize(
+        "NFC", target
+    )
+    if not canonical_decode:
         raise WrapperCompatibilityError(
-            "Supervised target does not decode back to the exact serialized transcript"
+            "Supervised target does not decode back to a Unicode-equivalent serialized transcript"
         )
 
     ignored = sum(value == IGNORE_INDEX for value in label_values)
@@ -214,6 +219,10 @@ def collate_official_single(
         "target_character_count": len(target),
         "target_sha256": hashlib.sha256(target.encode("utf-8")).hexdigest(),
         "decoded_supervised_target_matches": True,
+        "decoded_supervised_target_byte_exact": byte_exact_decode,
+        "decoded_supervised_target_unicode_normalization": (
+            "byte_exact" if byte_exact_decode else "canonical_equivalent"
+        ),
         "labels_match_target_token_ids": True,
         "prefix_fully_masked": True,
         "padding_fully_masked": True,

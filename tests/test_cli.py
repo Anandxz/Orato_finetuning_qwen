@@ -158,6 +158,55 @@ def test_data_commands_use_explicit_local_reports_and_exit_codes(tmp_path: Path)
     assert "Traceback" not in invalid.stderr
 
 
+def test_data_split_cli_writes_canonical_group_safe_manifests(tmp_path: Path) -> None:
+    source = tmp_path / "owner.jsonl"
+    categories = ("hi_clean", "hinglish", "call_like", "numbers_entities")
+    rows = []
+    for category in categories:
+        for index in range(10):
+            rows.append(
+                {
+                    "audio_filepath": str(tmp_path / f"{category}-{index}.wav"),
+                    "text": f"sample {category} {index}",
+                    "duration": 1.0,
+                    "language": "Hindi",
+                    "eval_category": category,
+                    "dataset": "fixture",
+                }
+            )
+    source.write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    train = tmp_path / "train.jsonl"
+    val = tmp_path / "val.jsonl"
+    test = tmp_path / "test.jsonl"
+    summary = tmp_path / "summary.json"
+
+    result = _run_cli(
+        "data",
+        "split",
+        "--manifest",
+        str(source),
+        "--train-output",
+        str(train),
+        "--val-output",
+        str(val),
+        "--test-output",
+        str(test),
+        "--summary-output",
+        str(summary),
+        "--seed",
+        "9",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["source_rows"] == 40
+    assert train.is_file() and val.is_file() and test.is_file() and summary.is_file()
+    assert sum(1 for _ in train.open(encoding="utf-8")) == 32
+
+
 def test_baseline_cli_returns_one_for_a_guard_stopped_run(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     import orato_asr.cli as cli
     import orato_asr.evaluation.baseline as baseline
@@ -180,6 +229,13 @@ def test_cli_help_exposes_native_inference_commands() -> None:
     assert "model" in result.stdout
     assert "transcribe" in result.stdout
     assert "doctor" in result.stdout
+
+
+def test_train_help_exposes_explicit_full_epoch_command() -> None:
+    result = _run_cli("train", "--help")
+
+    assert result.returncode == 0
+    assert "lora-full" in result.stdout
 
 
 def test_unloaded_model_info_reports_pins_without_model_loading() -> None:

@@ -1,0 +1,49 @@
+schema_version: 1
+model:
+  id: Qwen/Qwen3-ASR-0.6B
+  revision: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+  backend: qwen_asr_wrapper
+  dtype: bfloat16
+method:
+  type: lora
+  rank: 4
+  alpha: 16
+  dropout: 0.05
+  bias: none
+  freeze_audio_encoder: true
+  target_scope: text_decoder_attention_qv_only
+data:
+  min_audio_seconds: null
+  max_audio_seconds: 25
+  max_samples: null
+  max_hours: 8
+  num_workers: 0
+  pin_memory: false
+  persistent_workers: false
+training:
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 8
+  max_optimizer_steps: 500
+  learning_rate: 0.0001
+  weight_decay: 0.0
+  warmup_steps: 0
+  max_grad_norm: 1.0
+  gradient_checkpointing: true
+  use_cache: false
+  seed: 42
+  log_every_optimizer_steps: 1
+  save_every_optimizer_steps: 50
+memory:
+  gpu_safety_limit_gb: 5.3
+  minimum_available_system_ram_gb: 1.0
+  abort_on_threshold: true
+  capture_system_ram: true
+runtime:
+  run_kind: full_epoch
+  device: cuda
+  distributed: false
+  cpu_fallback: false
+paths:
+  output_root: outputs/training
+  reports_root: reports/training
+  model_cache_dir: null

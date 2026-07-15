@@ -10,6 +10,7 @@ from orato_asr.data.manifest import iter_manifest, iter_manifest_events, write_m
 from orato_asr.data.overlap import check_overlap
 from orato_asr.data.schema import ManifestRecord, parse_record
 from orato_asr.data.selection import SelectionOptions, select_manifest
+from orato_asr.data.splitting import SplitOptions, split_owner_manifest
 from orato_asr.data.summary import summarize_manifest
 from orato_asr.data.validation import validate_manifest
 from orato_asr.exceptions import ManifestError, ManifestValidationError
@@ -136,3 +137,106 @@ def test_summary_selection_and_overlap_are_deterministic(tmp_path: Path) -> None
     assert overlap.counts["transcript"] == 2
     assert overlap.prohibited_count == 3
     assert all(len(example.value) == 16 for example in overlap.examples)
+
+
+def test_owner_split_is_canonical_deterministic_complete_and_group_safe(
+    tmp_path: Path,
+) -> None:
+    categories = ("hi_clean", "hinglish", "call_like", "numbers_entities")
+    rows: list[dict[str, object]] = []
+    for category_index, category in enumerate(categories):
+        for sample_index in range(20):
+            rows.append(
+                {
+                    "audio_filepath": str(
+                        tmp_path / f"{category}-{sample_index}.wav"
+                    ),
+                    "text": f"नमस्ते sample {category_index} {sample_index}",
+                    "duration": float(sample_index % 5 + 1),
+                    "language": "Hindi-English" if category == "hinglish" else "Hindi",
+                    "source": "owner",
+                    "speaker_id": (
+                        f"shared-{sample_index // 2}"
+                        if category in {"hinglish", "call_like"}
+                        else f"{category}-{sample_index}"
+                    ),
+                    "split": "legacy",
+                    "eval_category": category,
+                    "dataset": "fixture",
+                    "custom_extension": {"preserved": True},
+                }
+            )
+    source = _write_manifest(tmp_path / "owner.jsonl", rows)
+    original = source.read_bytes()
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+
+    first = split_owner_manifest(
+        source,
+        train_output=first_dir / "train.jsonl",
+        val_output=first_dir / "val.jsonl",
+        test_output=first_dir / "test.jsonl",
+        summary_output=first_dir / "summary.json",
+        options=SplitOptions(seed=17),
+    )
+    second = split_owner_manifest(
+        source,
+        train_output=second_dir / "train.jsonl",
+        val_output=second_dir / "val.jsonl",
+        test_output=second_dir / "test.jsonl",
+        summary_output=second_dir / "summary.json",
+        options=SplitOptions(seed=17),
+    )
+
+    assert source.read_bytes() == original
+    assert first["source_rows"] == len(rows)
+    assert sum(values["rows"] for values in first["splits"].values()) == len(rows)
+    assert first["group_leakage_count"] == 0
+    assert all(
+        all(count > 0 for count in values["category_counts"].values())
+        for values in first["splits"].values()
+    )
+    for split in ("train", "val", "test"):
+        first_bytes = (first_dir / f"{split}.jsonl").read_bytes()
+        second_bytes = (second_dir / f"{split}.jsonl").read_bytes()
+        assert first_bytes == second_bytes
+        records = list(iter_manifest(first_dir / f"{split}.jsonl"))
+        assert all(record.split == split for record in records)
+        assert all("eval_category" in record.metadata for record in records)
+        assert all("custom_extension" in record.metadata for record in records)
+        assert all(record.metadata["source_split"] == "legacy" for record in records)
+
+    speaker_splits: dict[str, set[str]] = {}
+    for split in ("train", "val", "test"):
+        for record in iter_manifest(first_dir / f"{split}.jsonl"):
+            if record.speaker_id:
+                speaker_splits.setdefault(record.speaker_id, set()).add(split)
+    assert all(len(splits) == 1 for splits in speaker_splits.values())
+
+
+def test_owner_split_rejects_invalid_ratios_and_unknown_categories(tmp_path: Path) -> None:
+    source = _write_manifest(
+        tmp_path / "owner.jsonl",
+        [
+            {
+                "audio_filepath": "a.wav",
+                "text": "x",
+                "duration": 1.0,
+                "eval_category": "unexpected",
+            }
+        ],
+    )
+    outputs = {
+        "train_output": tmp_path / "train.jsonl",
+        "val_output": tmp_path / "val.jsonl",
+        "test_output": tmp_path / "test.jsonl",
+        "summary_output": tmp_path / "summary.json",
+    }
+    with pytest.raises(ManifestError, match="sum to 1"):
+        split_owner_manifest(
+            source,
+            options=SplitOptions(train_ratio=0.7, val_ratio=0.1, test_ratio=0.1),
+            **outputs,
+        )
+    with pytest.raises(ManifestValidationError, match="must be one of"):
+        split_owner_manifest(source, **outputs)

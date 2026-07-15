@@ -159,6 +159,28 @@ class _Processor:
         }
 
 
+class _CanonicallyNormalizingTokenizer(_Tokenizer):
+    def decode(
+        self,
+        token_ids: list[int],
+        *,
+        skip_special_tokens: bool,
+        clean_up_tokenization_spaces: bool,
+    ) -> str:
+        decoded = super().decode(
+            token_ids,
+            skip_special_tokens=skip_special_tokens,
+            clean_up_tokenization_spaces=clean_up_tokenization_spaces,
+        )
+        return decoded.replace("\u095d", "\u0922\u093c")
+
+
+class _CanonicallyNormalizingProcessor(_Processor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.tokenizer = _CanonicallyNormalizingTokenizer()
+
+
 def _sample(
     transcript: str = "मुझे appointment reschedule करनी है",
     language: str | None = "Hindi",
@@ -247,6 +269,21 @@ def test_collator_rejects_modality_type_ids_as_vocabulary_labels() -> None:
         match="Supervised token IDs do not exactly equal serialized target plus EOS",
     ):
         collate_official_single(processor, _sample())
+
+
+def test_collator_accepts_only_canonically_equivalent_tokenizer_decode() -> None:
+    collated = collate_official_single(
+        _CanonicallyNormalizingProcessor(),
+        _sample(transcript="ल\u095dती है"),
+        include_private_text=True,
+    )
+
+    assert collated.inspection["decoded_supervised_target_matches"] is True
+    assert collated.inspection["decoded_supervised_target_byte_exact"] is False
+    assert (
+        collated.inspection["decoded_supervised_target_unicode_normalization"]
+        == "canonical_equivalent"
+    )
 
 
 @pytest.mark.parametrize("duration", [0.0, -1.0, float("nan"), float("inf")])

@@ -188,24 +188,38 @@ def run_lora_training(
     *,
     train_manifest: str | Path,
     run_name: str,
-    optimizer_steps: int,
+    optimizer_steps: int | None,
     one_step_mode: bool,
     offline: bool = True,
     allow_without_one_step_evidence: bool = False,
+    full_epoch_mode: bool = False,
 ) -> dict[str, Any]:
-    """Run exactly one memory-ladder step or a bounded five/ten-step smoke."""
+    """Run one step, a bounded smoke, or one complete selected-data epoch."""
 
     if type(one_step_mode) is not bool:
         raise TrainingError("one_step_mode must be true or false")
+    if type(full_epoch_mode) is not bool:
+        raise TrainingError("full_epoch_mode must be true or false")
+    if one_step_mode and full_epoch_mode:
+        raise TrainingError("One-step and full-epoch modes are mutually exclusive")
     if one_step_mode and optimizer_steps != 1:
         raise TrainingError("lora-one-step must run exactly one optimizer step")
-    if not one_step_mode and optimizer_steps not in {5, 10}:
+    if not one_step_mode and not full_epoch_mode and optimizer_steps not in {5, 10}:
         raise TrainingError("lora-smoke permits exactly 5 or 10 optimizer steps")
 
     values = config.as_dict()
+    prepared = _prepare(config, train_manifest, require_training_split=True)
+    accumulation_configured = int(values["training"]["gradient_accumulation_steps"])
+    if full_epoch_mode:
+        if values["runtime"].get("run_kind") != "full_epoch":
+            raise TrainingError(
+                "lora-full requires a wrapper config with runtime.run_kind=full_epoch"
+            )
+        optimizer_steps = math.ceil(len(prepared.selected) / accumulation_configured)
+    if type(optimizer_steps) is not int or optimizer_steps <= 0:
+        raise TrainingError("Optimizer steps must be a positive integer")
     if optimizer_steps > int(values["training"]["max_optimizer_steps"]):
         raise TrainingError("Requested optimizer steps exceed the configured maximum")
-    prepared = _prepare(config, train_manifest, require_training_split=True)
     compatibility = _require_compatibility_evidence(
         Path(values["paths"]["reports_root"]),
         manifest_fingerprint=prepared.fingerprint,
@@ -216,7 +230,16 @@ def run_lora_training(
             manifest_fingerprint=prepared.fingerprint,
             method=values["method"],
         )
-    if not one_step_mode and optimizer_steps == 10:
+    if full_epoch_mode:
+        _require_five_step_evidence(
+            Path(values["paths"]["output_root"]),
+            manifest_fingerprint=prepared.fingerprint,
+            method=values["method"],
+            gpu_safety_limit_bytes=gib_to_bytes(
+                values["memory"]["gpu_safety_limit_gb"]
+            ),
+        )
+    elif not one_step_mode and optimizer_steps == 10:
         _require_five_step_evidence(
             Path(values["paths"]["output_root"]),
             manifest_fingerprint=prepared.fingerprint,
@@ -451,8 +474,9 @@ def run_lora_training(
             memory_events,
         )
 
-        accumulation = 1 if one_step_mode else int(
-            values["training"]["gradient_accumulation_steps"]
+        accumulation = 1 if one_step_mode else accumulation_configured
+        target_microsteps = (
+            len(dataset) if full_epoch_mode else optimizer_steps * accumulation
         )
         microstep = 0
         optimizer.zero_grad(set_to_none=True)
@@ -468,8 +492,9 @@ def run_lora_training(
             step_losses: list[float] = []
             step_started = time.perf_counter()
             step_sample_ids: list[str] = []
-            for _ in range(accumulation):
-                sample = dataset[microstep % len(dataset)]
+            step_accumulation = min(accumulation, target_microsteps - microstep)
+            for _ in range(step_accumulation):
+                sample = dataset[microstep] if full_epoch_mode else dataset[microstep % len(dataset)]
                 batch = collate_official_single(loaded.processor, sample)
                 inputs = move_batch_to_cuda(batch.inputs, loaded.torch)
                 _guard_and_record(
@@ -487,7 +512,7 @@ def run_lora_training(
                     loss_value = float(loss.detach().float().item())
                     if not math.isfinite(loss_value):
                         raise TrainingError(f"Non-finite training loss at microstep {microstep + 1}")
-                    (loss / accumulation).backward()
+                    (loss / step_accumulation).backward()
                 except Exception as exc:
                     if _is_cuda_oom(exc, loaded.torch):
                         raise TrainingOOMError(
@@ -569,6 +594,8 @@ def run_lora_training(
             "alpha": method["alpha"],
             "dropout": method["dropout"],
             "optimizer_steps": optimizer_steps,
+            "full_epochs": 1 if full_epoch_mode else 0,
+            "manifest_sha256": prepared.fingerprint,
         }
         write_atomic_json(
             directories.adapter_directory / "orato_adapter_metadata.json",
@@ -579,7 +606,13 @@ def run_lora_training(
         )
         runtime = time.perf_counter() - started
         summary = build_training_summary(
-            status="one_step_completed" if one_step_mode else "smoke_completed",
+            status=(
+                "one_step_completed"
+                if one_step_mode
+                else "full_epoch_completed"
+                if full_epoch_mode
+                else "smoke_completed"
+            ),
             total_manifest_samples=prepared.total_samples,
             total_manifest_duration_seconds=prepared.total_duration_seconds,
             eligible_samples=prepared.eligible_samples,
@@ -696,6 +729,11 @@ def run_lora_training(
             "known_limitations": [
                 "Fresh-process adapter verification remains a separate required command.",
                 "LoRA is a controlled project experiment, not an officially documented Qwen LoRA recipe.",
+                *(
+                    []
+                    if full_epoch_mode
+                    else ["A bounded smoke run does not establish full-dataset coverage."]
+                ),
             ],
         }
         result["report_facts"] = facts
@@ -746,7 +784,16 @@ def run_lora_training(
         if torch is not None:
             snapshot = _snapshot("failure", torch, values)
         failure = build_failure_metadata(
-            exc, stage="lora_one_step" if one_step_mode else "lora_smoke", snapshot=snapshot, torch_module=torch
+            exc,
+            stage=(
+                "lora_one_step"
+                if one_step_mode
+                else "lora_full_epoch"
+                if full_epoch_mode
+                else "lora_smoke"
+            ),
+            snapshot=snapshot,
+            torch_module=torch,
         )
         append_atomic_jsonl(failures_path, failure)
         if isinstance(exc, TrainingError):
@@ -791,10 +838,10 @@ def verify_adapter(
     max_samples: int,
     offline: bool = True,
 ) -> dict[str, Any]:
-    """Fresh-process base/adapter reload and bounded prediction comparison."""
+    """Fresh-process base/adapter reload and deterministic prediction comparison."""
 
-    if type(max_samples) is not int or not 1 <= max_samples <= 3:
-        raise AdapterVerificationError("Adapter verification max_samples must be 1 through 3")
+    if type(max_samples) is not int or max_samples < 1:
+        raise AdapterVerificationError("Adapter verification max_samples must be positive")
     values = config.as_dict()
     run_dir = Path(run_directory).expanduser().resolve()
     output_root = Path(values["paths"]["output_root"]).resolve()
@@ -825,7 +872,8 @@ def verify_adapter(
         or metadata.get("base_model_revision") != WRAPPER_MODEL_REVISION
         or metadata.get("backend") != WRAPPER_BACKEND
         or metadata.get("qwen_sft_commit") != QWEN_SFT_COMMIT
-        or metadata.get("optimizer_steps") not in {1, 5, 10}
+        or type(metadata.get("optimizer_steps")) is not int
+        or metadata["optimizer_steps"] <= 0
     ):
         raise AdapterVerificationError("Adapter metadata does not match the pinned wrapper base")
     approved = metadata.get("approved_module_paths")
@@ -848,7 +896,11 @@ def verify_adapter(
 
     run_summary_path = run_dir / "run_summary.json"
     run_summary = _read_json_object(run_summary_path, "training run summary")
-    if run_summary.get("status") not in {"one_step_completed", "smoke_completed"}:
+    if run_summary.get("status") not in {
+        "one_step_completed",
+        "smoke_completed",
+        "full_epoch_completed",
+    }:
         raise AdapterVerificationError(
             "Adapter verification requires a completed one-step or smoke run summary"
         )
@@ -879,7 +931,7 @@ def verify_adapter(
     if not records:
         raise AdapterVerificationError("Evaluation manifest contains no records")
 
-    base_predictions: list[str] = []
+    base_results: list[dict[str, Any]] = []
     loaded = load_wrapper_model(
         cache_dir=values["paths"]["model_cache_dir"], offline=offline, training=False
     )
@@ -887,15 +939,15 @@ def verify_adapter(
         for record, path, _duration in records:
             audio = decode_audio(path)
             try:
-                base_predictions.append(
-                    wrapper_inference(loaded, audio, language=record.language)["transcript"]
+                base_results.append(
+                    wrapper_inference(loaded, audio, language=record.language)
                 )
             finally:
                 del audio
     finally:
         loaded.close()
 
-    adapter_predictions: list[str] = []
+    adapter_results: list[dict[str, Any]] = []
     loaded = load_wrapper_model(
         cache_dir=values["paths"]["model_cache_dir"], offline=offline, training=True
     )
@@ -911,8 +963,8 @@ def verify_adapter(
         for record, path, _duration in records:
             audio = decode_audio(path)
             try:
-                adapter_predictions.append(
-                    wrapper_inference(loaded, audio, language=record.language)["transcript"]
+                adapter_results.append(
+                    wrapper_inference(loaded, audio, language=record.language)
                 )
             finally:
                 del audio
@@ -924,33 +976,80 @@ def verify_adapter(
         adapter_model = None
         loaded.close()
 
+    adapter_predictions = [str(result["transcript"]) for result in adapter_results]
     if any(is_blank(value) or is_punctuation_only(value) for value in adapter_predictions):
         raise AdapterVerificationError("Adapter produced blank or punctuation-only output")
     if len(adapter_predictions) > 1 and len(set(adapter_predictions)) == 1:
         raise AdapterVerificationError("Adapter produced identical-output collapse")
     options = NormalizationOptions()
     rows = []
-    for (record, _path, duration), base, adapter in zip(
-        records, base_predictions, adapter_predictions
+    base_metric_rows: list[dict[str, Any]] = []
+    adapter_metric_rows: list[dict[str, Any]] = []
+    for (record, _path, duration), base_result, adapter_result in zip(
+        records, base_results, adapter_results
     ):
+        base = str(base_result["transcript"])
+        adapter = str(adapter_result["transcript"])
+        base_seconds = float(base_result.get("inference_seconds") or 0.0)
+        adapter_seconds = float(adapter_result.get("inference_seconds") or 0.0)
+        base_metrics = compute_text_metrics(record.text, base, options=options)
+        adapter_metrics = compute_text_metrics(record.text, adapter, options=options)
+        category = record.metadata.get("eval_category")
         rows.append(
             {
                 "manifest_line": record.line_number,
                 "audio_filepath": record.audio_filepath,
                 "audio_duration_seconds": duration,
+                "category": category,
                 "reference": record.text,
                 "base_prediction": base,
                 "adapter_prediction": adapter,
-                "base_metrics": compute_text_metrics(record.text, base, options=options),
-                "adapter_metrics": compute_text_metrics(record.text, adapter, options=options),
+                "base_inference_seconds": base_seconds,
+                "adapter_inference_seconds": adapter_seconds,
+                "base_real_time_factor": base_seconds / duration if duration else None,
+                "adapter_real_time_factor": adapter_seconds / duration if duration else None,
+                "base_metrics": base_metrics,
+                "adapter_metrics": adapter_metrics,
+            }
+        )
+        base_metric_rows.append(
+            {
+                "status": "success",
+                **base_metrics,
+                "audio_duration_seconds": duration,
+                "inference_seconds": base_seconds,
+                "real_time_factor": base_seconds / duration if duration else None,
+            }
+        )
+        adapter_metric_rows.append(
+            {
+                "status": "success",
+                **adapter_metrics,
+                "audio_duration_seconds": duration,
+                "inference_seconds": adapter_seconds,
+                "real_time_factor": adapter_seconds / duration if duration else None,
             }
         )
     base_aggregate = aggregate_predictions(
-        [{"status": "success", **row["base_metrics"]} for row in rows]
+        base_metric_rows
     )
     adapter_aggregate = aggregate_predictions(
-        [{"status": "success", **row["adapter_metrics"]} for row in rows]
+        adapter_metric_rows
     )
+    categories = sorted(
+        {str(row["category"]) for row in rows if row.get("category") is not None}
+    )
+    category_metrics: dict[str, Any] = {}
+    for category in categories:
+        indexes = [
+            index for index, row in enumerate(rows) if str(row.get("category")) == category
+        ]
+        category_metrics[category] = {
+            "base": aggregate_predictions([base_metric_rows[index] for index in indexes]),
+            "adapter": aggregate_predictions(
+                [adapter_metric_rows[index] for index in indexes]
+            ),
+        }
     report = {
         "status": "success",
         "fresh_process_pid": os.getpid(),
@@ -961,6 +1060,7 @@ def verify_adapter(
             "base": base_aggregate,
             "adapter": adapter_aggregate,
         },
+        "category_metrics": category_metrics,
         "non_empty_predictions": True,
         "punctuation_only_collapse": False,
         "identical_output_collapse": False,
@@ -996,7 +1096,7 @@ def verify_adapter(
         {"saved": True, "reloaded": True, "path": str(adapter_dir)}
     )
     facts["predictions"] = {
-        "base": base_predictions[0],
+        "base": str(base_results[0]["transcript"]),
         "adapter": adapter_predictions[0],
     }
     facts["metrics"] = report["aggregate_metrics"]
@@ -1342,7 +1442,7 @@ def _require_five_step_evidence(
     raise TrainingError(
         "A verified five-step smoke with matching manifest/method, finite loss and "
         "gradients, safe peak memory, adapter save, and fresh-process reload is "
-        "required before a ten-step run"
+        "required before a ten-step or full-epoch run"
     )
 
 

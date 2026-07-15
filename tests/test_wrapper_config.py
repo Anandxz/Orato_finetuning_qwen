@@ -217,6 +217,37 @@ def test_runtime_is_cuda_only_single_process_without_cpu_fallback(
         load_wrapper_training_config(_write(tmp_path, profile), project_root=ROOT)
 
 
+def test_full_epoch_profile_expands_only_the_explicit_local_caps() -> None:
+    config = load_wrapper_training_config(
+        ROOT / "configs" / "train_wrapper_lora_full_epoch.yaml"
+    )
+    values = config.as_dict()
+
+    assert values["runtime"]["run_kind"] == "full_epoch"
+    assert values["data"]["max_audio_seconds"] == 25
+    assert values["data"]["max_hours"] == 8
+    assert values["training"]["max_optimizer_steps"] == 500
+    assert values["training"]["per_device_batch_size"] == 1
+    assert values["training"]["gradient_accumulation_steps"] == 8
+    assert values["memory"]["gpu_safety_limit_gb"] == 5.3
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("max_audio_seconds", 30.1), ("max_hours", 8.1)],
+)
+def test_full_epoch_profile_retains_bounded_data_caps(
+    tmp_path: Path, field: str, value: float
+) -> None:
+    profile = _profile()
+    profile["runtime"]["run_kind"] = "full_epoch"
+    profile["data"][field] = value
+    profile["training"]["max_optimizer_steps"] = 500
+
+    with pytest.raises(ConfigError, match=f"data.{field}"):
+        load_wrapper_training_config(_write(tmp_path, profile), project_root=ROOT)
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

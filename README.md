@@ -159,6 +159,35 @@ sanitized JSON/CSV, a per-run README, and `CTO_SMOKE_SUMMARY.md` are ignored bel
 `reports/training/<run-name>/`. A five-step smoke demonstrates plumbing only,
 not accuracy improvement, full-dataset coverage, or production readiness.
 
+After an exact-manifest one-step run, a verified five-step run, and a fresh
+adapter reload succeed, the explicit `lora-full` command may run one complete
+selected-data epoch. The local full-epoch profile keeps batch size 1,
+accumulation 8, the 5.3 GiB CUDA guard, and the same exact LoRA allowlist. It
+permits clips up to 30 seconds and at most eight selected hours; it does not
+silently repeat, drop, or offload samples. The last optimizer step uses the
+remaining partial accumulation group when the manifest size is not divisible
+by eight.
+
+```bash
+orato-asr train lora-full --offline \
+  --config configs/train_wrapper_lora_full_epoch.yaml \
+  --train-manifest /private/train.jsonl \
+  --eval-manifest /private/val.jsonl \
+  --run-name qwen06b_lora_full_epoch --device cuda
+
+# Fresh process: compare the untouched wrapper base and adapter on the same test rows.
+orato-asr train verify-adapter --offline \
+  --config configs/train_wrapper_lora_full_epoch.yaml \
+  --run-dir outputs/training/qwen06b_lora_full_epoch \
+  --eval-manifest /private/test.jsonl \
+  --max-samples 300 --device cuda
+```
+
+Large verification runs report raw and normalized WER/CER, edit counts,
+exact/blank/punctuation-only rates, inference timing, real-time factor, and
+the same metrics grouped by `metadata.eval_category`. Prediction reports retain
+private transcripts and local paths, remain ignored, and must not be committed.
+
 ## Command-line usage
 
 Foundation and configuration checks:
@@ -229,6 +258,11 @@ orato-asr data summarize --manifest /private/eval.jsonl \
   --output reports/evaluation/manifest_summary.json
 orato-asr data select --manifest /private/eval.jsonl \
   --output /private/eval_ten.jsonl --max-samples 10 --shuffled --seed 17
+orato-asr data split --manifest /private/owner_manifest.jsonl \
+  --train-output /private/train.jsonl \
+  --val-output /private/val.jsonl \
+  --test-output /private/test.jsonl \
+  --summary-output /private/split_summary.json --seed 42
 orato-asr data check-overlap --train-manifest /private/train.jsonl \
   --evaluation-manifest /private/eval.jsonl --hash-local-audio \
   --output reports/evaluation/overlap.json
@@ -238,6 +272,13 @@ orato-asr data check-overlap --train-manifest /private/train.jsonl \
 Overlap of normalized audio paths, local content hashes, or recording IDs is
 prohibited and returns `1`; repeated transcript text is informational. Speaker
 overlap becomes prohibited only with `--disallow-speaker-overlap`.
+
+`data split` imports dataset-specific top-level extensions into nested
+`metadata`, preserves every source row exactly once, and writes canonical
+80/10/10 train/validation/test manifests atomically. It unions speaker,
+recording, and original-recording identifiers before assignment, targets both
+per-category row counts and audio durations, and orders the train split in a
+deterministic category round-robin. It never rewrites the source manifest.
 
 Run a bounded base evaluation only against local readable WAV/FLAC records:
 

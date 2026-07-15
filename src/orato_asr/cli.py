@@ -93,6 +93,21 @@ def build_parser() -> argparse.ArgumentParser:
     data_select.add_argument("--seed", type=int, default=0)
     data_select.add_argument("--shuffled", action="store_true")
     data_select.add_argument("--overwrite", action="store_true")
+    data_split = data_commands.add_parser(
+        "split",
+        help="Canonicalize and group-safely stratify an owner manifest",
+    )
+    data_split.add_argument("--manifest", required=True, type=Path)
+    data_split.add_argument("--train-output", required=True, type=Path)
+    data_split.add_argument("--val-output", required=True, type=Path)
+    data_split.add_argument("--test-output", required=True, type=Path)
+    data_split.add_argument("--summary-output", required=True, type=Path)
+    data_split.add_argument("--train-ratio", type=float, default=0.8)
+    data_split.add_argument("--val-ratio", type=float, default=0.1)
+    data_split.add_argument("--test-ratio", type=float, default=0.1)
+    data_split.add_argument("--seed", type=int, default=42)
+    data_split.add_argument("--category-field", default="eval_category")
+    data_split.add_argument("--overwrite", action="store_true")
     data_overlap = data_commands.add_parser("check-overlap", help="Check train/evaluation leakage")
     data_overlap.add_argument("--train-manifest", required=True, type=Path)
     data_overlap.add_argument("--evaluation-manifest", required=True, type=Path)
@@ -169,13 +184,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Development-only override; the default requires successful one-step evidence",
     )
 
+    full = train_commands.add_parser(
+        "lora-full",
+        help="Run one complete selected-data LoRA epoch after verified smoke evidence",
+    )
+    full.add_argument("--config", default="configs/train_wrapper_lora_full_epoch.yaml")
+    full.add_argument("--train-manifest", required=True, type=Path)
+    full.add_argument("--eval-manifest", required=True, type=Path)
+    full.add_argument("--run-name", required=True)
+    full.add_argument("--device", choices=("cuda",), default="cuda")
+    full.add_argument("--offline", action="store_true")
+    full.add_argument("--output-json", type=Path)
+
     verify = train_commands.add_parser(
         "verify-adapter", help="Fresh-process adapter reload and bounded evaluation"
     )
     verify.add_argument("--config", default=DEFAULT_WRAPPER_CONFIG)
     verify.add_argument("--run-dir", required=True, type=Path)
     verify.add_argument("--eval-manifest", required=True, type=Path)
-    verify.add_argument("--max-samples", type=int, choices=(1, 2, 3), default=3)
+    verify.add_argument("--max-samples", type=int, default=3)
     verify.add_argument("--device", choices=("cuda",), default="cuda")
     verify.add_argument("--offline", action="store_true")
     verify.add_argument("--output-json", type=Path)
@@ -351,6 +378,26 @@ def _run_data(args: argparse.Namespace) -> int:
             )
             print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
+        if args.data_command == "split":
+            from .data.splitting import SplitOptions, split_owner_manifest
+
+            report = split_owner_manifest(
+                args.manifest,
+                train_output=args.train_output,
+                val_output=args.val_output,
+                test_output=args.test_output,
+                summary_output=args.summary_output,
+                options=SplitOptions(
+                    train_ratio=args.train_ratio,
+                    val_ratio=args.val_ratio,
+                    test_ratio=args.test_ratio,
+                    seed=args.seed,
+                    category_field=args.category_field,
+                ),
+                overwrite=args.overwrite,
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
         if args.data_command == "check-overlap":
             from .data.overlap import check_overlap
 
@@ -472,6 +519,28 @@ def _run_train(args: argparse.Namespace) -> int:
                 one_step_mode=False,
                 offline=args.offline,
                 allow_without_one_step_evidence=args.allow_without_one_step_evidence,
+            )
+        elif args.train_command == "lora-full":
+            from .data.overlap import check_overlap
+
+            overlap = check_overlap(
+                args.train_manifest,
+                args.eval_manifest,
+                project_root=config.project_root,
+                hash_local_audio=True,
+            )
+            if overlap.prohibited_count:
+                raise EvaluationError(
+                    f"Train/evaluation overlap has {overlap.prohibited_count} prohibited finding(s)"
+                )
+            payload = run_lora_training(
+                config,
+                train_manifest=args.train_manifest,
+                run_name=args.run_name,
+                optimizer_steps=None,
+                one_step_mode=False,
+                offline=args.offline,
+                full_epoch_mode=True,
             )
         elif args.train_command == "verify-adapter":
             payload = verify_adapter(

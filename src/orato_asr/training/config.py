@@ -77,7 +77,7 @@ _SECTION_KEYS = {
         "abort_on_threshold",
         "capture_system_ram",
     },
-    "runtime": {"device", "distributed", "cpu_fallback"},
+    "runtime": {"device", "distributed", "cpu_fallback", "run_kind"},
     "paths": {"output_root", "reports_root", "model_cache_dir"},
 }
 
@@ -174,6 +174,8 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
             f"{schema_version!r}"
         )
 
+    runtime_section = _section(values, "runtime")
+    runtime_section.setdefault("run_kind", "smoke")
     sections = {name: _section(values, name) for name in _SECTION_KEYS}
     for name, section in sections.items():
         _validate_keys(section, _SECTION_KEYS[name], f"section {name!r}")
@@ -216,16 +218,25 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
     max_audio_seconds = _positive_number(
         data["max_audio_seconds"], "data.max_audio_seconds"
     )
-    if max_audio_seconds > 10:
+    run_kind = _exact_one_of(
+        sections["runtime"]["run_kind"],
+        "runtime.run_kind",
+        {"smoke", "full_epoch"},
+    )
+    maximum_audio_cap = 10 if run_kind == "smoke" else 30
+    if max_audio_seconds > maximum_audio_cap:
         raise ConfigError(
-            "data.max_audio_seconds must not exceed the qualified laptop cap of 10"
+            "data.max_audio_seconds must not exceed "
+            f"{maximum_audio_cap} for runtime.run_kind={run_kind!r}"
         )
     if min_audio_seconds is not None and min_audio_seconds >= max_audio_seconds:
         raise ConfigError(
             "data.min_audio_seconds must be less than data.max_audio_seconds"
         )
     _optional_positive_int(data["max_samples"], "data.max_samples")
-    _positive_number(data["max_hours"], "data.max_hours")
+    max_hours = _positive_number(data["max_hours"], "data.max_hours")
+    if run_kind == "full_epoch" and max_hours > 8:
+        raise ConfigError("data.max_hours must not exceed 8 for the local full-epoch run")
     num_workers = _nonnegative_int(data["num_workers"], "data.num_workers")
     if num_workers != 0:
         raise ConfigError("data.num_workers must be 0 for the laptop smoke run")
@@ -251,9 +262,11 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
     max_steps = _positive_int(
         training["max_optimizer_steps"], "training.max_optimizer_steps"
     )
-    if max_steps > 20:
+    maximum_step_cap = 20 if run_kind == "smoke" else 1000
+    if max_steps > maximum_step_cap:
         raise ConfigError(
-            "training.max_optimizer_steps must not exceed the explicit smoke cap of 20"
+            "training.max_optimizer_steps must not exceed "
+            f"{maximum_step_cap} for runtime.run_kind={run_kind!r}"
         )
     _positive_number(training["learning_rate"], "training.learning_rate")
     _nonnegative_number(training["weight_decay"], "training.weight_decay")
@@ -302,6 +315,7 @@ def _validate_and_resolve(values: dict[str, Any], project_root: Path) -> None:
     )
 
     runtime = sections["runtime"]
+    _exact_one_of(runtime["run_kind"], "runtime.run_kind", {"smoke", "full_epoch"})
     _exact(runtime["device"], "runtime.device", "cuda")
     _required_boolean(runtime["distributed"], "runtime.distributed", required=False)
     _required_boolean(runtime["cpu_fallback"], "runtime.cpu_fallback", required=False)
@@ -365,6 +379,15 @@ def _exact(value: object, field: str, expected: str) -> str:
     selected = _non_empty_string(value, field)
     if selected != expected:
         raise ConfigError(f"{field} must be {expected!r}; received {selected!r}")
+    return selected
+
+
+def _exact_one_of(value: object, field: str, expected: set[str]) -> str:
+    selected = _non_empty_string(value, field)
+    if selected not in expected:
+        raise ConfigError(
+            f"{field} must be one of {', '.join(sorted(expected))}; received {selected!r}"
+        )
     return selected
 
 

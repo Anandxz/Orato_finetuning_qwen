@@ -164,6 +164,13 @@ This is a controlled project experiment, not an official Qwen LoRA recipe or
 a runtime fallback. It is not accepted until backward, adapter-only save, a
 fresh-process reload, and fixed-sample inference all pass.
 
+The local runner also has a separate one-epoch mode for an owner-approved,
+canonical local manifest. It is gated by an exact-manifest compatibility run,
+one optimizer step, a five-step smoke, and fresh-process adapter verification.
+It keeps the same batch-one/accumulation-eight LoRA contract and hard memory
+guards. Full-epoch execution must consume each selected training row once;
+validation and test rows remain excluded from optimization.
+
 ## Training engineering principles
 
 - Authoritative logic belongs in version-controlled Python modules and command-line entry points.
