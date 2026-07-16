@@ -39,6 +39,18 @@ def test_checked_in_one_hour_config_is_a_separate_smoke_profile() -> None:
     assert config.save_steps == 25
 
 
+def test_checked_in_100_hour_config_is_a_separate_long_profile() -> None:
+    config = load_official_h100_config(
+        PROJECT_ROOT / "configs" / "train_wrapper_official_sft_h100_100hr.yaml"
+    )
+
+    assert config.profile_name == "official_sft_h100_100hr"
+    assert config.train_max_hours == 100.0
+    assert config.validation_max_hours == 1.0
+    assert config.save_steps == 200
+    assert config.save_total_limit == 3
+
+
 def test_h100_config_rejects_model_revision_drift(tmp_path: Path) -> None:
     payload = yaml.safe_load(
         (PROJECT_ROOT / "configs" / "train_wrapper_official_sft_h100_20hr.yaml").read_text(
@@ -187,3 +199,13 @@ def test_one_hour_job_has_an_isolated_output_and_profile() -> None:
     assert "official-sft-h100-1hr" in payload["outputs"]["training_output"]["path"]
     assert "train_wrapper_official_sft_h100_1hr.yaml" in payload["command"]
     assert payload["limits"]["timeout"] == 21600
+
+
+def test_100_hour_job_has_an_isolated_output_and_profile() -> None:
+    path = PROJECT_ROOT / "azureml" / "jobs" / "official-sft-h100-100hr.yml"
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert payload["environment"] == "azureml:orato-qwen3-asr-wrapper-lora:2"
+    assert "official-sft-h100-100hr" in payload["outputs"]["training_output"]["path"]
+    assert "train_wrapper_official_sft_h100_100hr.yaml" in payload["command"]
+    assert payload["limits"]["timeout"] == 259200

@@ -299,11 +299,33 @@ H100_JOB=$(az ml job create \
 az ml job stream --name "$H100_JOB"
 ```
 
-The one-hour job writes to `official-sft-h100-1hr`, while the longer job writes
-to `official-sft-h100-20hr`. Never resume a longer dataset run from the
-one-hour checkpoint. After the one-hour job and `verification.json` pass, use
-the separate 20-hour job. A future 100-hour run must likewise use its own
-configuration and output path rather than changing this job in place.
+The one-hour job writes to `official-sft-h100-1hr`, while the longer jobs write
+to separate 20-hour and 100-hour locations. Never resume a longer dataset run
+from the one-hour checkpoint. After the one-hour job and `verification.json`
+pass, use the separate 20-hour or 100-hour job.
+
+### 5.6 Run the isolated 100-hour profile
+
+The 100-hour profile selects at most 100 training hours and one validation
+hour. It saves every 200 optimizer steps, keeps the latest three checkpoints,
+has a 72-hour wall-clock limit, and writes only to
+`official-sft-h100-100hr`:
+
+```bash
+H100_JOB=$(az ml job create \
+  -f azureml/jobs/official-sft-h100-100hr.yml \
+  --set inputs.processed_data.path="$ORATO_AZUREML_PROCESSED_URI" \
+  --set inputs.split_data.path="$ORATO_SPLIT_URI" \
+  --set compute="azureml:${ORATO_H100_COMPUTE}" \
+  --query name --output tsv)
+
+echo "$H100_JOB"
+az ml job stream --name "$H100_JOB"
+```
+
+Resubmitting this same 100-hour job can resume its highest durable
+`checkpoint-*`. It cannot see the one-hour checkpoints because its output path
+is different. Do not run two copies of the 100-hour job simultaneously.
 
 ## Troubleshooting
 

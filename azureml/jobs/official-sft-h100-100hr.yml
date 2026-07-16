@@ -1,0 +1,48 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+
+type: command
+display_name: orato-official-sft-h100-100hr
+experiment_name: orato-qwen3-asr-official-sft
+
+code: ../..
+
+inputs:
+  processed_data:
+    type: uri_folder
+    path: azureml://datastores/workspaceblobstore/paths/processed
+    mode: ro_mount
+  split_data:
+    type: uri_folder
+    path: azureml://datastores/workspaceblobstore/paths/splitting
+    mode: ro_mount
+
+outputs:
+  training_output:
+    type: uri_folder
+    path: azureml://datastores/workspaceblobstore/paths/orato-training/official-sft-h100-100hr
+    mode: rw_mount
+  model_cache:
+    type: uri_folder
+    path: azureml://datastores/workspaceblobstore/paths/orato-model-cache/qwen3-asr-0.6b-wrapper
+    mode: rw_mount
+
+command: >-
+  CUDA_VISIBLE_DEVICES=0
+  ORATO_DATA_ROOT=${{inputs.processed_data}}
+  HF_HOME=${{outputs.model_cache}}
+  PYTHONPATH=src
+  python -m orato_asr.training.official_h100 run
+  --config configs/train_wrapper_official_sft_h100_100hr.yaml
+  --train-manifest ${{inputs.split_data}}/train.jsonl
+  --validation-manifest ${{inputs.split_data}}/valid.jsonl
+  --output-dir ${{outputs.training_output}}
+  --cache-dir ${{outputs.model_cache}}
+  --project-root .
+  --resume
+  --verify-samples 3
+
+environment: azureml:orato-qwen3-asr-wrapper-lora:2
+compute: azureml:<single-h100-compute-name>
+
+limits:
+  timeout: 259200
