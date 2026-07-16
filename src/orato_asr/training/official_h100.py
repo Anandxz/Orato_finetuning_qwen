@@ -315,6 +315,9 @@ def train_official_h100(args: argparse.Namespace) -> int:
     from .official_sft import patch_outer_forward
 
     patch_outer_forward(model)
+    model.generation_config = transformers.GenerationConfig.from_model_config(
+        model.config
+    )
     model.config.use_cache = False
     model.train()
     train_dataset = PreparedJsonlDataset(prepared_dir / "train.jsonl")
@@ -339,10 +342,12 @@ def train_official_h100(args: argparse.Namespace) -> int:
         load_best_model_at_end=False,
         dataloader_num_workers=config.dataloader_num_workers,
         dataloader_pin_memory=True,
+        dataloader_persistent_workers=config.dataloader_num_workers > 0,
+        dataloader_prefetch_factor=2 if config.dataloader_num_workers > 0 else None,
         remove_unused_columns=False,
         max_grad_norm=1.0,
-        lr_scheduler_type="cosine",
-        warmup_ratio=0.03,
+        lr_scheduler_type="linear",
+        warmup_ratio=0.02,
         seed=config.seed,
         data_seed=config.seed,
         report_to="none",
@@ -471,6 +476,17 @@ def run_and_verify(args: argparse.Namespace) -> int:
 
 def _finite_trainer_class(transformers: Any, torch: Any) -> type:
     class FiniteTrainer(transformers.Trainer):
+        def _prepare_inputs(self, inputs: Any) -> Any:
+            """Match Qwen's official float-input cast before every forward."""
+
+            prepared = super()._prepare_inputs(inputs)
+            model_dtype = getattr(self.model, "dtype", None)
+            if model_dtype is not None:
+                for name, value in list(prepared.items()):
+                    if bool(torch.is_tensor(value)) and bool(value.is_floating_point()):
+                        prepared[name] = value.to(dtype=model_dtype)
+            return prepared
+
         def compute_loss(self, model: Any, inputs: Any, return_outputs: bool = False, num_items_in_batch: Any = None) -> Any:
             result = super().compute_loss(
                 model,

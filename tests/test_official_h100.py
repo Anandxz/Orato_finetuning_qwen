@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
 
 from orato_asr.exceptions import TrainingError
 from orato_asr.training.official_h100 import (
+    _finite_trainer_class,
     _latest_checkpoint,
     load_official_h100_config,
     prepare_official_jsonl,
@@ -173,6 +175,38 @@ def test_latest_checkpoint_uses_highest_step(tmp_path: Path) -> None:
     (tmp_path / "checkpoint-invalid").mkdir()
 
     assert _latest_checkpoint(tmp_path) == tmp_path / "checkpoint-100"
+
+
+def test_finite_trainer_casts_float_inputs_to_model_dtype() -> None:
+    class FakeTensor:
+        def __init__(self, *, floating: bool) -> None:
+            self.floating = floating
+            self.cast_dtype = None
+
+        def is_floating_point(self) -> bool:
+            return self.floating
+
+        def to(self, *, dtype: object) -> "FakeTensor":
+            self.cast_dtype = dtype
+            return self
+
+    class FakeTrainer:
+        def __init__(self) -> None:
+            self.model = SimpleNamespace(dtype="bfloat16")
+
+        def _prepare_inputs(self, inputs: object) -> object:
+            return inputs
+
+    fake_transformers = SimpleNamespace(Trainer=FakeTrainer)
+    fake_torch = SimpleNamespace(is_tensor=lambda value: isinstance(value, FakeTensor))
+    trainer = _finite_trainer_class(fake_transformers, fake_torch)()
+    floating = FakeTensor(floating=True)
+    integer = FakeTensor(floating=False)
+
+    prepared = trainer._prepare_inputs({"input_features": floating, "input_ids": integer})
+
+    assert prepared["input_features"].cast_dtype == "bfloat16"
+    assert prepared["input_ids"].cast_dtype is None
 
 
 def test_azure_h100_job_reuses_registered_wrapper_environment() -> None:
