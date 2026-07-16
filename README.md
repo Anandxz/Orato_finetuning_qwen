@@ -14,8 +14,9 @@ training, evaluation, and deployment context.
 
 ## Current status
 
-The project retains native Transformers inference and now also contains an
-isolated, memory-guarded wrapper-LoRA smoke path. The backends use different
+The project retains native Transformers inference, an isolated memory-guarded
+wrapper-LoRA laptop path, and a single-H100 full supervised fine-tuning path
+based on Qwen's current official wrapper contract. The backends use different
 checkpoints and environments and are never loaded in one process.
 It provides:
 
@@ -42,7 +43,9 @@ Qwen LoRA recipe. The exact wrapper inference, collator, base-loss, and LoRA
 forward stages have been qualified locally; a real optimizer step and adapter
 verification still require a separate owner-supplied training manifest.
 Portable local/Azure data resolution and versioned multi-dataset split
-generation are implemented. Azure H100 training jobs, distributed training,
+generation are implemented. A bounded 20-hour, single-H100 Azure ML job now
+performs resumable BF16 full SFT, finite loss/gradient checks, durable full-model
+checkpoints, and fresh-process fixed-sample verification. Distributed training,
 FlashAttention, quantization, and serving remain unimplemented.
 
 For the CPU-first Azure setup, direct Blob cache, Azure ML mount job, and H100
@@ -328,8 +331,11 @@ the configured baseline policy.
 
 - `local_tiny.yaml`: RTX 3050/CPU qualification, at most 50 samples, inference
   device `auto`.
-- `h100_smoke.yaml`: planned one-hour, single-H100 work; inference device
-  `cuda`.
+- `h100_smoke.yaml`: native `-hf` one-hour inference/evaluation profile; its
+  native training flag remains disabled because training uses the separate
+  wrapper backend.
+- `train_wrapper_official_sft_h100_20hr.yaml`: implemented single-H100,
+  20-hour full SFT profile for the pinned non-`-hf` wrapper checkpoint.
 - `h100_100hr.yaml`: planned 100-hour, single-H100 work; inference device
   `cuda`.
 - `h100_8gpu.yaml`: planned one-node/eight-H100 training capability. It remains

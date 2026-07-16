@@ -1,0 +1,30 @@
+schema_version: 1
+profile:
+  name: official_sft_h100_20hr
+upstream:
+  qwen_repository_commit: 7c6daf77a2421100f5fb066495372c00129d39ff
+  sft_script_sha256: 6f3e5cc530d9da9ff405144fc94a5c4790018eaf956dbc623634818160418976
+model:
+  id: Qwen/Qwen3-ASR-0.6B
+  revision: 5eb144179a02acc5e5ba31e748d22b0cf3e303b0
+data:
+  train_max_hours: 20.0
+  validation_max_hours: 0.5
+  max_audio_seconds: 30.0
+hardware:
+  accelerator: h100
+  gpu_count: 1
+  distributed: false
+  precision: bfloat16
+training:
+  per_device_batch_size: 1
+  gradient_accumulation_steps: 8
+  learning_rate: 0.00002
+  epochs: 1.0
+  logging_steps: 10
+  evaluation_steps: 100
+  dataloader_num_workers: 4
+  seed: 42
+checkpointing:
+  save_steps: 100
+  keep_last: 2

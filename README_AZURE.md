@@ -156,25 +156,154 @@ versions require explicit `--overwrite`:
 orato-asr data build-splits --config configs/splits/split1.yaml
 ```
 
-## 5. H100 hand-off
+## 5. Single-H100 20-hour smoke training
 
-Use the same immutable processed root and generated split manifests. For H100
-throughput, prefer a read-only Azure ML mount or stage selected data to
-node-local NVMe; per-sample Blob download is a correctness fallback, not the
-recommended training path.
+The H100 job is implemented as full BF16 supervised fine-tuning of the pinned
+`Qwen/Qwen3-ASR-0.6B` wrapper checkpoint. It uses Qwen's official target,
+processor, prefix masking, and forward contract. This is intentionally not the
+laptop LoRA runner, and it does not inherit the laptop's 5.3 GiB memory guard.
 
-Retain the split fingerprint/report, exact passing test summary, bounded audio
-validation report, and Azure environment qualification result. The wrapper
-training commands remain CUDA-only. Do not run them on CPU or claim H100
-readiness until the H100 environment/profile, one-step backward pass, adapter
-save, fresh-process reload, and fixed-sample predictions pass.
+The checked-in job selects at most 20 training audio hours and 0.5 validation
+hours, rejects clips over 30 seconds, uses one visible H100, batch size 1 with
+gradient accumulation 8, and trains for one epoch. It stops on non-finite loss
+or gradients, keeps the latest two resumable checkpoints, saves a final full
+model, then loads that model in a new Python process and transcribes three
+validation samples. It does not claim accuracy improvement from this smoke run.
 
-The current upstream Qwen repository now publishes
-[`finetuning/qwen3_asr_sft.py`](https://github.com/QwenLM/Qwen3-ASR/tree/main/finetuning)
-with single-GPU and `torchrun` usage. Before the H100 run, reconcile and qualify
-this repository's training backend against that current official SFT contract;
-the CPU data milestone does not authorize or validate an older/custom training
-path.
+### 5.1 Reuse the existing Azure environment
+
+The environment you already created is the reusable Docker runtime for jobs.
+Azure ML pulls version 2 onto the GPU compute, so the job does not create a
+virtual environment or run `pip install`. The source repository is uploaded
+separately, which means changes to this training module do not require a new
+image while its package requirements stay unchanged.
+
+Confirm that the registered version exists:
+
+```bash
+az ml environment show \
+  --name orato-qwen3-asr-wrapper-lora \
+  --version 2 \
+  --output table
+```
+
+Only if version 2 is not registered in this workspace, create it once:
+
+```bash
+az ml environment create -f azureml/environments/wrapper-lora-v2.yml
+```
+
+The H100 job references it directly as
+`azureml:orato-qwen3-asr-wrapper-lora:2`. Do not repeat the manual installation
+commands from the CPU compute-instance section inside the GPU job.
+
+### 5.2 Set the three Azure values
+
+Use the processed-folder URI already qualified on CPU. Point `ORATO_SPLIT_URI`
+at the owner-created `splitting/` datastore folder:
+
+```bash
+export ORATO_AZUREML_PROCESSED_URI="<full-azureml-datastore-uri-to-processed>"
+export ORATO_SPLIT_URI="<full-azureml-datastore-uri-to-splitting>"
+export ORATO_H100_COMPUTE="<h100-compute-name>"
+```
+
+The short workspace-relative form is:
+
+```bash
+export ORATO_SPLIT_URI="azureml://datastores/workspaceblobstore/paths/splitting"
+```
+
+The mounted folder must contain `train.jsonl`, `valid.jsonl`, and `test.jsonl`
+at its root. This smoke job trains from `train.jsonl`, evaluates and performs
+fresh-process predictions from `valid.jsonl`, and does not read `test.jsonl`.
+
+Owner-created rows may contain provenance fields such as `dataset_folder`,
+`original_audio_id`, `original_audio_path`, and `sample_rate`. The H100 input
+adapter accepts those fields without making them model inputs. It uses
+`audio_filepath`, `duration`, `text`, `language`, `source`, and `split`.
+For example, `gram_vaani/audio/example.flac` resolves to that path beneath the
+read-only mounted `processed/` input. Transcript text, including markers such
+as `#incomplete`, is preserved exactly.
+
+### 5.3 Submit and watch the GPU job
+
+Run this from the cloned repository after pulling the latest commit:
+
+```bash
+git pull --ff-only
+
+H100_JOB=$(az ml job create \
+  -f azureml/jobs/official-sft-h100-20hr.yml \
+  --set inputs.processed_data.path="$ORATO_AZUREML_PROCESSED_URI" \
+  --set inputs.split_data.path="$ORATO_SPLIT_URI" \
+  --set compute="azureml:${ORATO_H100_COMPUTE}" \
+  --query name --output tsv)
+
+echo "$H100_JOB"
+az ml job stream --name "$H100_JOB"
+```
+
+The job pins GPU visibility to device 0, so a multi-GPU H100 VM still runs this
+single-GPU milestone safely. Its 36-hour Azure ML timeout is a wall-clock safety
+limit, not an expected runtime. Do not submit two copies simultaneously because
+this profile deliberately uses stable output paths for resume.
+
+Check status later or cancel a bad run:
+
+```bash
+az ml job show --name "$H100_JOB" --query status --output tsv
+az ml job cancel --name "$H100_JOB"
+```
+
+### 5.4 What success looks like
+
+The durable training output contains:
+
+```text
+prepared/train.jsonl
+prepared/validation.jsonl
+run_contract.json
+trainer/checkpoint-*/
+trainer/trainer_state.json
+final/
+training_summary.json
+verification.json
+```
+
+Treat the run as technically successful only when the Azure job is `Completed`,
+`training_summary.json` has `status: trained`, and `verification.json` has
+`status: success` with three non-empty, non-collapsed predictions. The same job
+can be resubmitted after interruption; `--resume` selects the highest durable
+`trainer/checkpoint-*` directory.
+
+The current official source contract is Qwen's
+[`finetuning/qwen3_asr_sft.py`](https://github.com/QwenLM/Qwen3-ASR/tree/main/finetuning).
+This milestone remains single-GPU. Eight-GPU distributed training is still out
+of scope until this job and its fresh-process checkpoint verification pass.
+
+### 5.5 Recommended first run: one hour
+
+Before the 20-hour run, submit the isolated one-hour profile. It selects at
+most one training audio hour and 0.1 validation hours, saves every 25 optimizer
+steps, and has a six-hour wall-clock limit:
+
+```bash
+H100_JOB=$(az ml job create \
+  -f azureml/jobs/official-sft-h100-1hr.yml \
+  --set inputs.processed_data.path="$ORATO_AZUREML_PROCESSED_URI" \
+  --set inputs.split_data.path="$ORATO_SPLIT_URI" \
+  --set compute="azureml:${ORATO_H100_COMPUTE}" \
+  --query name --output tsv)
+
+az ml job stream --name "$H100_JOB"
+```
+
+The one-hour job writes to `official-sft-h100-1hr`, while the longer job writes
+to `official-sft-h100-20hr`. Never resume a longer dataset run from the
+one-hour checkpoint. After the one-hour job and `verification.json` pass, use
+the separate 20-hour job. A future 100-hour run must likewise use its own
+configuration and output path rather than changing this job in place.
 
 ## Troubleshooting
 
