@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import math
+import os
 import re
 import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 from urllib.parse import urlsplit
 
 from ..exceptions import ManifestValidationError
+
+if TYPE_CHECKING:
+    from ..paths import DataPathResolver
 
 REQUIRED_FIELDS = frozenset({"audio_filepath", "text"})
 OPTIONAL_FIELDS = frozenset(
@@ -167,8 +171,22 @@ def is_remote_locator(value: str) -> bool:
     return parsed.scheme.lower() in _REMOTE_SCHEMES and bool(parsed.scheme)
 
 
-def resolve_local_audio_path(record: ManifestRecord, project_root: Path) -> Path | None:
-    """Resolve an absolute or repository-relative local path; never resolve URIs."""
+def resolve_local_audio_path(
+    record: ManifestRecord,
+    project_root: Path,
+    *,
+    data_resolver: "DataPathResolver | None" = None,
+) -> Path | None:
+    """Resolve through the configured data root while preserving legacy behavior."""
+
+    if data_resolver is not None:
+        return data_resolver.resolve(record.audio_filepath)
+    if "ORATO_DATA_ROOT" in os.environ:
+        from ..paths import resolver_from_environment
+
+        return resolver_from_environment(project_root=project_root).resolve(
+            record.audio_filepath
+        )
 
     if record.is_remote:
         return None

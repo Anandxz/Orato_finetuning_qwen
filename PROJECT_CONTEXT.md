@@ -97,11 +97,13 @@ The repository now supports strict, UTF-8 JSONL manifests for local data work.
 Canonical rows require `audio_filepath` and `text`; optional `duration`,
 language/source/speaker/recording/domain/split identifiers, and nested
 `metadata` support deterministic validation, selection, and leakage checks.
-Absolute and repository-relative local audio paths are supported. Azure/Blob
-and HTTP(S) locators may be structurally represented but are never downloaded,
-authenticated, or accessed by this repository. Do not commit real Azure
-identifiers, private URLs, SAS tokens, manifests, audio, or data-derived
-reports.
+Absolute and repository-relative local audio paths remain supported for
+backward compatibility. New split manifests use processed-root-relative
+logical paths. A central resolver supports local/Azure-mounted roots and an
+optional direct `az://` Blob backend with atomic deterministic caching;
+managed identity or environment-managed credentials are required. Other
+remote locators remain structural-only. Do not commit real Azure identifiers,
+private URLs, SAS tokens, manifests, audio, or data-derived reports.
 
 Duplicate normalized audio paths, content hashes when locally requested, and
 recording IDs are leakage; repeated transcript text is only informational.

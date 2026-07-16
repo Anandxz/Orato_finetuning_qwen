@@ -56,3 +56,9 @@ training backend and must never be mixed with the native checkpoint or classes.
 
 The native environment still does not install `qwen-asr` or PEFT. Application,
 training, and notebook code never installs or upgrades packages.
+
+For CPU-only Azure data and split qualification, use
+`requirements/cpu-validation.txt`. It adds the audio decoder stack and optional
+Azure Identity/Blob clients, but deliberately omits PyTorch, Transformers,
+qwen-asr, PEFT, and model downloads. Azure packages are only needed for direct
+`az://` localization; Azure ML mounts and local paths use the local backend.

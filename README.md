@@ -41,8 +41,12 @@ is incorrect. Wrapper LoRA is a controlled project experiment, not an official
 Qwen LoRA recipe. The exact wrapper inference, collator, base-loss, and LoRA
 forward stages have been qualified locally; a real optimizer step and adapter
 verification still require a separate owner-supplied training manifest.
-Azure, distributed training, FlashAttention, quantization, and serving remain
-unimplemented.
+Portable local/Azure data resolution and versioned multi-dataset split
+generation are implemented. Azure H100 training jobs, distributed training,
+FlashAttention, quantization, and serving remain unimplemented.
+
+For the CPU-first Azure setup, direct Blob cache, Azure ML mount job, and H100
+handoff checklist, see [README_AZURE.md](README_AZURE.md).
 
 ## Repository structure
 
@@ -245,11 +249,13 @@ The canonical manifest is UTF-8 JSON Lines. Every row has exactly
 {"audio_filepath":"audio/call-0001.flac","text":"मुझे appointment reschedule करना है","duration":3.42,"language":"hi","source":"calls","recording_id":"call-0001","metadata":{"split_source":"owner-reviewed"}}
 ```
 
-Local audio may be an absolute path or repository-relative path. `azureml:`,
-Blob-style, and HTTP(S) locators are accepted structurally but are never
-downloaded, authenticated, or validated locally. Do not put a SAS token or a
-private URL in a manifest intended for shared reports. This repository does
-not copy or document owner Azure identifiers.
+Existing manifests may use absolute paths or repository-relative paths.
+Generated split manifests instead use processed-root-relative logical paths.
+Set `ORATO_DATA_ROOT` to a local/mounted processed directory or to
+`az://<container>/processed`; direct Blob objects are localized atomically
+beneath `ORATO_CACHE_ROOT` with managed identity or an environment-managed
+connection string. Other remote schemes remain structural-only. Never put a
+SAS token or private URL in a manifest or shared report.
 
 ```bash
 orato-asr data validate --manifest /private/eval.jsonl --check-audio \
@@ -279,6 +285,21 @@ overlap becomes prohibited only with `--disallow-speaker-overlap`.
 recording, and original-recording identifiers before assignment, targets both
 per-category row counts and audio durations, and orders the train split in a
 deterministic category round-robin. It never rewrites the source manifest.
+
+For all processed datasets, use the configuration-driven splitter:
+
+```bash
+export ORATO_DATA_ROOT=/mnt/orato-data/processed
+export ORATO_SPLIT_ROOT=data/splits
+
+orato-asr data build-splits --config configs/splits/split_all.yaml
+orato-asr data validate-splits --split-dir data/splits/split_all/v1
+```
+
+Generated rows retain transcript text, point back to audio under `processed/`,
+keep linked session/source/speaker identifiers in one split, and record
+source/output SHA-256 fingerprints. Root-level `data/` is ignored and generated
+manifests containing private data must not be committed.
 
 Run a bounded base evaluation only against local readable WAV/FLAC records:
 

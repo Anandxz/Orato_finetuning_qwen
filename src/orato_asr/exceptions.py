@@ -19,6 +19,10 @@ class PathSafetyError(OratoASRError, ValueError):
     """Raised when a repository-managed path is unsafe or unsupported."""
 
 
+class StorageError(OratoASRError):
+    """Raised when configured local or Azure-backed data cannot be resolved."""
+
+
 class PreflightError(OratoASRError):
     """Raised when an expected preflight operation cannot be completed."""
 
@@ -109,6 +113,7 @@ __all__ = [
     "AdapterVerificationError",
     "OratoASRError",
     "PathSafetyError",
+    "StorageError",
     "PreflightError",
     "ProjectConfigurationError",
     "UnsafePathError",

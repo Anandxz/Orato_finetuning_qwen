@@ -18,6 +18,7 @@ from ..data.schema import (
     resolve_local_audio_path,
 )
 from ..exceptions import AudioValidationError, ManifestError, TrainingError
+from ..paths import DataPathResolver, resolver_from_environment
 from .official_sft import WrapperSample
 
 
@@ -103,6 +104,7 @@ def prepare_training_manifest(
     max_samples: int | None,
     max_hours: float,
     require_training_split: bool = False,
+    data_resolver: DataPathResolver | None = None,
 ) -> PreparedTrainingManifest:
     """Validate every local clip while retaining only offsets and small metadata."""
 
@@ -124,6 +126,7 @@ def prepare_training_manifest(
         raise TrainingError("require_training_split must be true or false")
 
     source = Path(manifest).expanduser().resolve()
+    resolver = data_resolver or _optional_environment_resolver(project_root)
     fingerprint = manifest_fingerprint(source)
     eligible: list[TrainingSampleRef] = []
     excluded: list[ExcludedTrainingSample] = []
@@ -139,12 +142,14 @@ def prepare_training_manifest(
                     f"{source}:{record.line_number}: training rejects explicit "
                     f"non-training split {record.split!r}"
                 )
-        if record.is_remote:
+        if record.is_remote and resolver is None:
             raise TrainingError(
                 f"{source}:{record.line_number}: wrapper training requires local audio; "
                 f"remote locator {display_audio_locator(record.audio_filepath)!r} is unsupported"
             )
-        audio_path = resolve_local_audio_path(record, project_root)
+        audio_path = resolve_local_audio_path(
+            record, project_root, data_resolver=resolver
+        )
         assert audio_path is not None
         try:
             decoded = decode_audio(audio_path)
@@ -237,9 +242,18 @@ def prepare_training_manifest(
 class LazyWrapperTrainingDataset(Sequence[WrapperSample]):
     """Recover and decode only the sample requested by the current microstep."""
 
-    def __init__(self, prepared: PreparedTrainingManifest, *, project_root: Path) -> None:
+    def __init__(
+        self,
+        prepared: PreparedTrainingManifest,
+        *,
+        project_root: Path,
+        data_resolver: DataPathResolver | None = None,
+    ) -> None:
         self.prepared = prepared
         self.project_root = project_root.expanduser().resolve()
+        self.data_resolver = data_resolver or _optional_environment_resolver(
+            self.project_root
+        )
 
     def __len__(self) -> int:
         return len(self.prepared.selected)
@@ -253,7 +267,9 @@ class LazyWrapperTrainingDataset(Sequence[WrapperSample]):
                 f"Sample {ref.sample_id} manifest record changed after preflight; "
                 "source data must remain immutable"
             )
-        path = resolve_local_audio_path(record, self.project_root)
+        path = resolve_local_audio_path(
+            record, self.project_root, data_resolver=self.data_resolver
+        )
         if path is None:
             raise TrainingError(
                 f"Sample {ref.sample_id} unexpectedly resolved to remote audio"
@@ -345,6 +361,14 @@ def _record_at(source: Path, ref: TrainingSampleRef) -> ManifestRecord:
 
 def _positive_finite(value: object) -> bool:
     return type(value) in (int, float) and math.isfinite(float(value)) and float(value) > 0
+
+
+def _optional_environment_resolver(project_root: Path) -> DataPathResolver | None:
+    import os
+
+    if "ORATO_DATA_ROOT" not in os.environ:
+        return None
+    return resolver_from_environment(project_root=project_root)
 
 
 __all__ = [

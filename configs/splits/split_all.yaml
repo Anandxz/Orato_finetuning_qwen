@@ -1,0 +1,58 @@
+name: split_all
+version: v1
+seed: 42
+
+ratios:
+  train: 0.80
+  validation: 0.10
+  test: 0.10
+
+# Paths are relative to ORATO_DATA_ROOT, so this same file works on a laptop,
+# an Azure ML mount, or the direct az:// backend. The *_full manifests are used
+# instead of loading both full and normal variants and duplicating recordings.
+manifests:
+  - rasa_hindi/manifest.jsonl
+  - shekharmeena_synthetic_multiple_speaker/manifest.jsonl
+  - shekharmeena_synthetic_female_only/manifest.jsonl
+  - springlab_hindi_1482hrs/manifest.jsonl
+  - indicvoices_hindi/manifest_full.jsonl
+  - indictts_hindi/manifest.jsonl
+  - gram_vaani/manifest.jsonl
+  - mucs_subtask1/manifest.jsonl
+  - mucs_subtask2/manifest.jsonl
+  - hiacc/manifest_full.jsonl
+  - indic_superb/manifest.jsonl
+
+datasets:
+  include: ["*"]
+  exclude: []
+  defaults: {}
+
+grouping:
+  priority:
+    - session_id
+    - call_id
+    - source_id
+    - video_id
+    - speaker_id
+    - recording_id
+    - audio_filepath
+
+stratification:
+  fields:
+    - dataset
+    - language
+    - domain
+    - contains_number
+    - duration_bucket
+    - tags
+  duration_buckets:
+    short: [null, 5.0]
+    medium: [5.0, 15.0]
+    long: [15.0, null]
+
+validation:
+  # Keep false for direct Blob runs: downloading all audio defeats a cheap CPU
+  # metadata split. Validate a bounded sample with --check-audio afterward.
+  require_audio_exists: false
+  fail_on_duplicate_audio_path: true

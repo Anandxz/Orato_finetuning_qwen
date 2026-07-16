@@ -1,0 +1,28 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandJob.schema.json
+
+type: command
+display_name: orato-build-splits-cpu
+experiment_name: orato-data-qualification
+
+code: ../..
+
+inputs:
+  processed_data:
+    type: uri_folder
+    path: azureml://datastores/workspaceblobstore/paths/processed
+    mode: ro_mount
+
+outputs:
+  split_output:
+    type: uri_folder
+    mode: rw_mount
+
+command: >-
+  ORATO_DATA_ROOT=${{inputs.processed_data}}
+  ORATO_SPLIT_ROOT=${{outputs.split_output}}
+  PYTHONPATH=src
+  python -m orato_asr.cli data build-splits
+  --config configs/splits/split_all.yaml
+
+environment: azureml:orato-qwen3-asr-wrapper-lora:2
+compute: azureml:<cpu-compute-name>

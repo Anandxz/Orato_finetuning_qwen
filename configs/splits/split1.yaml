@@ -1,0 +1,42 @@
+name: split1
+version: v1
+seed: 42
+
+ratios:
+  train: 0.80
+  validation: 0.10
+  test: 0.10
+
+manifests:
+  - rasa_hindi/manifest.jsonl
+  - gram_vaani/manifest.jsonl
+  - indic_superb/manifest.jsonl
+
+datasets:
+  include:
+    - rasa_hindi
+    - gram_vaani
+    - indic_superb
+  exclude: []
+  defaults: {}
+
+grouping:
+  priority:
+    - session_id
+    - call_id
+    - source_id
+    - video_id
+    - speaker_id
+    - recording_id
+    - audio_filepath
+
+stratification:
+  fields: [dataset, language, domain, contains_number, duration_bucket, tags]
+  duration_buckets:
+    short: [null, 5.0]
+    medium: [5.0, 15.0]
+    long: [15.0, null]
+
+validation:
+  require_audio_exists: false
+  fail_on_duplicate_audio_path: true

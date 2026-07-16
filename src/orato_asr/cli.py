@@ -16,7 +16,13 @@ import yaml
 
 from .config import ConfigError, ProjectConfig, load_config
 from .environment import collect_environment
-from .exceptions import EvaluationError, ManifestError, OratoASRError, PathSafetyError
+from .exceptions import (
+    EvaluationError,
+    ManifestError,
+    OratoASRError,
+    PathSafetyError,
+    StorageError,
+)
 from .paths import find_project_root
 from .version import __version__
 
@@ -108,6 +114,24 @@ def build_parser() -> argparse.ArgumentParser:
     data_split.add_argument("--seed", type=int, default=42)
     data_split.add_argument("--category-field", default="eval_category")
     data_split.add_argument("--overwrite", action="store_true")
+    data_build_splits = data_commands.add_parser(
+        "build-splits",
+        help="Build a versioned leakage-safe split across processed datasets",
+    )
+    data_build_splits.add_argument("--config", required=True, type=Path)
+    data_build_splits.add_argument("--data-root")
+    data_build_splits.add_argument("--split-root", type=Path)
+    data_build_splits.add_argument("--seed", type=int)
+    data_build_splits.add_argument("--train-ratio", type=float)
+    data_build_splits.add_argument("--validation-ratio", type=float)
+    data_build_splits.add_argument("--test-ratio", type=float)
+    data_build_splits.add_argument("--overwrite", action="store_true")
+    data_validate_splits = data_commands.add_parser(
+        "validate-splits", help="Validate a versioned split bundle"
+    )
+    data_validate_splits.add_argument("--split-dir", required=True, type=Path)
+    data_validate_splits.add_argument("--data-root")
+    data_validate_splits.add_argument("--check-audio", action="store_true")
     data_overlap = data_commands.add_parser("check-overlap", help="Check train/evaluation leakage")
     data_overlap.add_argument("--train-manifest", required=True, type=Path)
     data_overlap.add_argument("--evaluation-manifest", required=True, type=Path)
@@ -398,6 +422,37 @@ def _run_data(args: argparse.Namespace) -> int:
             )
             print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
             return 0
+        if args.data_command == "build-splits":
+            from .data.build_splits import (
+                build_splits,
+                format_split_summary,
+                load_split_config,
+            )
+
+            config = load_split_config(
+                args.config,
+                project_root=project_root,
+                data_root=args.data_root,
+                split_root=args.split_root,
+                seed=args.seed,
+                train_ratio=args.train_ratio,
+                validation_ratio=args.validation_ratio,
+                test_ratio=args.test_ratio,
+            )
+            report = build_splits(config, overwrite=args.overwrite)
+            print(format_split_summary(report))
+            return 0
+        if args.data_command == "validate-splits":
+            from .data.build_splits import validate_split_directory
+
+            report = validate_split_directory(
+                args.split_dir,
+                project_root=project_root,
+                data_root=args.data_root,
+                check_audio=args.check_audio,
+            )
+            print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if report["status"] == "success" else 2
         if args.data_command == "check-overlap":
             from .data.overlap import check_overlap
 
@@ -413,7 +468,7 @@ def _run_data(args: argparse.Namespace) -> int:
                 write_json_atomic(payload, args.output)
             print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
             return 1 if report.prohibited_count else 0
-    except (ManifestError, PathSafetyError, OSError, ValueError) as exc:
+    except (ManifestError, PathSafetyError, StorageError, OSError, ValueError) as exc:
         print(f"Data command failed: {_sanitize_cli_error(exc)}", file=sys.stderr)
         return 2
     raise AssertionError(f"Unsupported data command: {args.data_command}")

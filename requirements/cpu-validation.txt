@@ -1,0 +1,6 @@
+# Cheap Azure/local CPU data validation only. This is not a model-training stack.
+numpy==2.4.2
+soundfile==0.14.0
+soxr==1.1.0
+azure-identity>=1.19,<2
+azure-storage-blob>=12.24,<13

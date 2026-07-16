@@ -1,0 +1,16 @@
+name: local_example
+version: v1
+seed: 42
+storage:
+  backend: local
+  data_root: /path/to/orato/data/processed
+  split_root: data/splits
+  cache_root: outputs/data_cache
+ratios: {train: 0.80, validation: 0.10, test: 0.10}
+manifests: []
+datasets: {include: ["*"], exclude: [], defaults: {}}
+grouping:
+  priority: [session_id, call_id, source_id, video_id, speaker_id, recording_id, audio_filepath]
+stratification:
+  fields: [dataset, language, domain, contains_number, duration_bucket]
+validation: {require_audio_exists: true, fail_on_duplicate_audio_path: true}
